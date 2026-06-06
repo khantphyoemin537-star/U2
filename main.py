@@ -28,8 +28,8 @@ WAIFU_CHAT_ID = -1003999318284
 # Global States & Multi-Client Tracking
 running_clients = {}          # { "session_string": client_instance }
 processed_spawns = set()      # Spawn ထပ်မံ Forward မဖြစ်စေရန် ထိန်းပေးမည့် Cache
-spawn_tracker = {}            # Waifu Chat မက်ဆေ့ခ်ျ ID နှင့် မူရင်း Group ID ချိတ်ဆက်ပေးမည့် Map
-group_clients_tracker = {}    # 👈 [NEW] { group_id: {client_id1, client_id2} } ဘယ်ဂရုထဲမှာ ဘယ်ဖောက်သည်တွေရှိလဲ မှတ်မည့်နေရာ
+spawn_tracker = {}            # Waifu Chat မက်ဆေ့ခ်ျ ID နှင့် မူရင်း Group ID ချิตဆက်ပေးမည့် Map
+group_clients_tracker = {}    # { group_id: {client_id1, client_id2} } ဘယ်ဂရုထဲမှာ ဘယ်ဖောက်သည်တွေရှိလဲ မှတ်မည့်နေရာ
 last_spawn_chat_id = None     
 is_catch_stopped = False      
 HINT_REGEX = re.compile(r"(/catch\s+[^\n]+)") 
@@ -47,7 +47,7 @@ bot = TelegramClient('official_bot_session', APP_ID, APP_HASH)
 # ==========================================
 async def handle_render_health_check(reader, writer):
     await reader.read(100)
-    response = "HTTP/1.1 200 OK\\r\\nContent-Type: text/plain\\r\\nContent-Length: 2\\r\\n\\r\\nOK"
+    response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK"
     writer.write(response.encode('utf-8'))
     await writer.drain()
     writer.close()
@@ -80,27 +80,36 @@ async def spawn_detector_handler(event):
     global last_spawn_chat_id, spawn_tracker, processed_spawns, group_clients_tracker
     
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        if "A CHARACTER HAS SPAWNED IN THE CHAT!" in event.text.upper():
-            
+        text_content = event.text
+        
+        # ⚡ [FIXED] Unicode Small-Caps နှင့် Standard English နှစ်မျိုးစလုံးကို ချွင်းချက်မရှိ ဖမ်းမိစေရန် ပြင်ဆင်ခြင်း
+        is_spawn_msg = any(trigger in text_content or trigger in text_content.upper() for trigger in [
+            "A CHARACTER HAS SPAWNED", 
+            "ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ", 
+            "ʜᴀʀᴇᴍ ᴜsɪɴɢ", 
+            "ᴄʜᴀʀᴀᴄᴛᴇʀ"
+        ])
+        
+        if is_spawn_msg:
             # 🚫 Safe Zone Groups
-            if event.chat_id in [-1003580630982, -1004067509608]:
+            if event.chat_id in [-1003580630381, -1004067509608]:
                 return  
 
             # Rare Emojis စစ်ထုတ်ခြင်း
-            if any(emoji in event.text for emoji in ["🔵", "🟣", "🟠"]):
+            if any(emoji in text_content for emoji in ["🔵", "🟣", "🟠"]):
                 return  
 
             orig_chat_id = event.chat_id
             last_spawn_chat_id = orig_chat_id  
             
-            # ⚡ [NEW] လက်ရှိဂရုထဲမှာ ဒီ Spawn မက်ဆေ့ခ်ျကို လှမ်းမြင်ရတဲ့ Client ID ကို Dynamic ဖမ်းမှတ်ခြင်း
+            # လက်ရှိဂရုထဲမှာ ဒီ Spawn ကို လှမ်းမြင်ရတဲ့ ဖောက်သည်အကောင့်တွေကို Dynamic အရင်ဆုံး မှတ်သားမည်
             client_id = getattr(event.client, 'me_id', None)
             if client_id:
                 if orig_chat_id not in group_clients_tracker:
                     group_clients_tracker[orig_chat_id] = set()
                 group_clients_tracker[orig_chat_id].add(client_id)
 
-            # ⚡ Smart Deduplication: ဘယ်သူပဲအရင်မြင်မြင် Waifu Chat ဆီ တစ်ခါပဲ Forward သွားစေရန်
+            # ⚡ Smart Deduplication: ဘယ်သူပဲအရင်မြင်မြင် ပုံ သို့မဟုတ် ဗီဒီယိုကို Waifu Chat ဆီ တစ်ခါပဲ Forward သွားစေရန်
             spawn_key = f"{orig_chat_id}_{event.id}"
             if spawn_key in processed_spawns:
                 return
@@ -110,14 +119,14 @@ async def spawn_detector_handler(event):
                 processed_spawns.remove(next(iter(processed_spawns)))
             
             try:
-                # Waifu Chat ဆီ လှမ်းပို့ပြီး ခြေရာခံခြင်း
+                # ပုံ သို့မဟုတ် ဗီဒီယိုဖြစ်စေ Caption နှင့်တကွ Waifu Chat ဆီ ဖော်ဝါ့ဒ်လုပ်ပြီး /waifu ဟု Reply ပြန်ခြင်း
                 fwd_msg = await event.message.forward_to(WAIFU_CHAT_ID)
                 reply_msg = await fwd_msg.reply("/waifu")
                 
                 spawn_tracker[fwd_msg.id] = orig_chat_id
                 spawn_tracker[reply_msg.id] = orig_chat_id
                 
-                if len(spawn_tracker) > 150:
+                if len(spawn_tracker) > 200:
                     spawn_tracker.pop(next(iter(spawn_tracker)))
                     
             except Exception as e:
@@ -133,31 +142,30 @@ async def hint_solver_handler(event):
     if event.chat_id == WAIFU_CHAT_ID and event.sender_id == HINT_BOT_ID and event.text:
         match = HINT_REGEX.search(event.text)
         if match:
-            catch_command = match.group(1).strip(" `\\n\\r")
+            catch_command = match.group(1).strip(" `\n\r")
             target_group = last_spawn_chat_id
             
             if event.reply_to_msg_id and event.reply_to_msg_id in spawn_tracker:
                 target_group = spawn_tracker[event.reply_to_msg_id]
                 
             if target_group:
-                if target_group in [-1003580630982, -1004067509608]:
+                if target_group in [-1003580630381, -1004067509608]:
                     return
                 try:
-                    # ⚡ [NEW/CRITICAL] လက်ရှိ Hint ကိုဖတ်နေတဲ့ အကောင့်ဟာ မူရင်း Spawn တက်ခဲ့တဲ့ဂရုထဲမှာ ရှိနေတဲ့သူ ဟုတ်မဟုတ် စစ်ဆေးခြင်း
                     client_id = getattr(event.client, 'me_id', None)
                     valid_clients = group_clients_tracker.get(target_group, set())
                     
-                    # အကယ်၍ ဤအကောင့်သည် အဆိုပါဂရုထဲတွင် မရှိပါက လုံးဝ (လုံးဝ) စာသွားမအော်ဘဲ Skip မည်
+                    # လက်ရှိဂရုထဲမှာ တကယ်ရှိနေတဲ့ အကောင့်ဖြစ်မှသာ စာလှမ်းအော်မည်
                     if client_id and client_id not in valid_clients:
                         return
                     
-                    # ဂရုတူတဲ့ ဖောက်သည်အချင်းချင်းကြားထဲမှာပဲ Speed ပြိုင်လုစေရန် Delay ထည့်သွင်းခြင်း
+                    # ဂရုတူအချင်းချင်းကြားတွင် Flood မမိစေရန် Delay ခွဲပေးခြင်း
                     delay_time = random.uniform(0.5, 0.8) 
                     await asyncio.sleep(delay_time)
                     
                     sent_msg = await event.client.send_message(target_group, catch_command)
                     
-                    # မိမိတို့ ပို့လိုက်တဲ့ /catch ကို သီးသန့်စီ ၁ စက္ကန့်အကြာတွင် ပြန်ဖျက်ခိုင်းခြင်း
+                    # ပို့ပြီးသား /catch စာသားကို ၁ စက္ကန့်အကြာတွင် ပြန်ဖျက်ခြင်း
                     asyncio.create_task(delete_catch_message_delayed(event.client, target_group, sent_msg.id))
                     
                 except Exception as e:
@@ -167,7 +175,17 @@ async def hint_solver_handler(event):
 async def catch_success_forwarder_handler(event):
     """ ဖောက်သည်အကောင့်များထဲမှ တစ်ခုခု ကတ်မိသွားရင် သတ်မှတ် Group ထဲ Forward ပို့ပေးမည့်စနစ် """
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        if " NORTHROP " in event.text.upper() or " NORDSTROM " in event.text.upper() or "YOU GOT A NEW CHARACTER!" in event.text.upper():
+        text_content = event.text
+        
+        # ⚡ [FIXED] အောင်မြင်မှုစာသား Unicode အလှများကိုပါ ထည့်သွင်းစစ်ဆေးခြင်း
+        is_success_msg = any(trigger in text_content or trigger in text_content.upper() for trigger in [
+            "YOU GOT A NEW CHARACTER!", 
+            "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!", 
+            "NORTHROP", 
+            "NORDSTROM"
+        ])
+        
+        if is_success_msg:
             if event.message.mentioned:
                 try:
                     await event.message.forward_to(SPECIFIC_GROUP)
@@ -186,11 +204,11 @@ async def start_new_userbot(session_str):
         client = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
         await client.start()
         
-        # ⚡ Performance မြန်စေရန် Client ID ကို ကြိုတင် Cache လုပ်ပြီး သိမ်းထားခြင်း
+        # Client ID အား ကြိုတင် Cache ပြုလုပ်ခြင်း
         me = await client.get_me()
         client.me_id = me.id
         
-        # အကောင့်တိုင်းအတွက် Handler များကို သီးသန့်စီ Bind ပေးခြင်း
+        # အကောင့်တစ်ခုချင်းစီအတွက် Event Handlers များကို Bind လုပ်ခြင်း
         client.add_event_handler(spawn_detector_handler, events.NewMessage())
         client.add_event_handler(hint_solver_handler, events.NewMessage())
         client.add_event_handler(catch_success_forwarder_handler, events.NewMessage())
@@ -238,7 +256,7 @@ async def handle_bot_commands(event):
         
         success = await start_new_userbot(session_str)
         if success:
-            await event.reply(f"🚀 **Userbot အသစ် အသက်ဝင်လာပါပြီ!**\\nစုစုပေါင်း Active ဖောက်သည်အကောင့်: `{len(running_clients)}` ခု ရှိသွားပါပြီ Chief!")
+            await event.reply(f"🚀 **Userbot အသစ် အသက်ဝင်လာပါပြီ!**\nစုစုပေါင်း Active ဖောက်သည်အကောင့်: `{len(running_clients)}` ခု ရှိသွားပါပြီ Chief!")
         else:
             await event.reply("❌ အဆိုပါ String Session အား ချိတ်ဆက်၍မရပါ (Expired ဖြစ်နေနိုင်သည်)။")
 
@@ -251,7 +269,7 @@ async def handle_bot_commands(event):
         await event.reply("✅ **Chief! အကောင့်အားလုံးရဲ့ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်အသက်သွင်းလိုက်ပါပြီ။**")
 
     elif cmd == "/status":
-        await event.reply(f"📊 **System Status Check:**\\n\\n👤 Total Active Accounts: `{len(running_clients)}` ခု\\n⚙️ Sniper Status: `{'STOPPED 🛑' if is_catch_stopped else 'RUNNING ⚡'}`")
+        await event.reply(f"📊 **System Status Check:**\n\n👤 Total Active Accounts: `{len(running_clients)}` ခု\n⚙️ Sniper Status: `{'STOPPED 🛑' if is_catch_stopped else 'RUNNING ⚡'}`")
 
 # ==========================================
 # 🚀 SYSTEM STARTUP LOGIC (LOAD ALL SESSIONS)
