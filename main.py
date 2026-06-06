@@ -15,7 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 31566870
 APP_HASH = '579663bdeae6426ca3c7e9feb3f9ca35'
-BOT_TOKEN = '8738081667:AAGr7HkSxO6nC_QhPJJElKR2VKABTEDfNEo'
+BOT_TOKEN = '8111794244:AAGpkLE7h5x_IYFvjkVCbJosDC1TFbCGxcQ'
 
 OWNER_ID = 6015356597
 SPECIFIC_GROUP = -1003999318284
@@ -28,7 +28,7 @@ WAIFU_CHAT_ID = -1003999318284
 # Global States & Multi-Client Tracking
 running_clients = {}          # { "session_string": client_instance }
 processed_spawns = set()      # Spawn ထပ်မံ Forward မဖြစ်စေရန် ထိန်းပေးမည့် Cache
-spawn_tracker = {}            # Waifu Chat မက်ဆေ့ခ်ျ ID နှင့် မူရင်း Group ID ချิตဆက်ပေးမည့် Map
+spawn_tracker = {}            # Waifu Chat မက်ဆေ့ခ်ျ ID နှင့် မူရင်း Group ID ချိတ်ဆက်ပေးမည့် Map
 group_clients_tracker = {}    # { group_id: {client_id1, client_id2} } ဘယ်ဂရုထဲမှာ ဘယ်ဖောက်သည်တွေရှိလဲ မှတ်မည့်နေရာ
 last_spawn_chat_id = None     
 is_catch_stopped = False      
@@ -82,17 +82,16 @@ async def spawn_detector_handler(event):
     if event.sender_id == SPAWN_BOT_ID and event.text:
         text_content = event.text
         
-        # ⚡ [FIXED] Unicode Small-Caps နှင့် Standard English နှစ်မျိုးစလုံးကို ချွင်းချက်မရှိ ဖမ်းမိစေရန် ပြင်ဆင်ခြင်း
-        is_spawn_msg = any(trigger in text_content or trigger in text_content.upper() for trigger in [
-            "A CHARACTER HAS SPAWNED", 
-            "ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ", 
-            "ʜᴀʀᴇᴍ ᴜsɪɴɢ", 
-            "ᴄʜᴀʀᴀᴄᴛᴇʀ"
-        ])
+        # ⚡ [FIXED] တောင်းဆိုထားသည့်အတိုင်း စာသားအပြည့်အစုံ ကွက်တိပါဝင်မှသာ အလုပ်လုပ်ရန် စစ်ဆေးခြင်း
+        # Small Caps စာသားပုံစံ နှစ်ကြောင်းစလုံး မဖြစ်မနေ ပါဝင်ရမည်ဖြစ်ပြီး စာလုံးအချို့ပါရုံနှင့် မလုပ်တော့ပါ
+        is_spawn_msg = (
+            "ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!" in text_content and
+            "ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /catch" in text_content
+        )
         
         if is_spawn_msg:
             # 🚫 Safe Zone Groups
-            if event.chat_id in [-1003580630381, -1004067509608]:
+            if event.chat_id in [-1003580630982, -1004067509608]:
                 return  
 
             # Rare Emojis စစ်ထုတ်ခြင်း
@@ -102,14 +101,14 @@ async def spawn_detector_handler(event):
             orig_chat_id = event.chat_id
             last_spawn_chat_id = orig_chat_id  
             
-            # လက်ရှိဂရုထဲမှာ ဒီ Spawn ကို လှမ်းမြင်ရတဲ့ ဖောက်သည်အကောင့်တွေကို Dynamic အရင်ဆုံး မှတ်သားမည်
+            # လက်ရှိဂရုထဲမှာ ဒီ Spawn ကို လန်းမြင်ရတဲ့ ဖောက်သည်အကောင့်တွေကို Dynamic အရင်ဆုံး မှတ်သားမည်
             client_id = getattr(event.client, 'me_id', None)
             if client_id:
                 if orig_chat_id not in group_clients_tracker:
                     group_clients_tracker[orig_chat_id] = set()
                 group_clients_tracker[orig_chat_id].add(client_id)
 
-            # ⚡ Smart Deduplication: ဘယ်သူပဲအရင်မြင်မြင် ပုံ သို့မဟုတ် ဗီဒီယိုကို Waifu Chat ဆီ တစ်ခါပဲ Forward သွားစေရန်
+            # ⚡ Smart Deduplication: ဘယ်သူပဲအရင်မြင်မြင် Waifu Chat ဆီ တစ်ခါပဲ Forward သွားစေရန်
             spawn_key = f"{orig_chat_id}_{event.id}"
             if spawn_key in processed_spawns:
                 return
@@ -149,7 +148,7 @@ async def hint_solver_handler(event):
                 target_group = spawn_tracker[event.reply_to_msg_id]
                 
             if target_group:
-                if target_group in [-1003580630381, -1004067509608]:
+                if target_group in [-1003580630982, -1004067509608]:
                     return
                 try:
                     client_id = getattr(event.client, 'me_id', None)
@@ -160,7 +159,7 @@ async def hint_solver_handler(event):
                         return
                     
                     # ဂရုတူအချင်းချင်းကြားတွင် Flood မမိစေရန် Delay ခွဲပေးခြင်း
-                    delay_time = random.uniform(0.5, 0.8) 
+                    delay_time = random.uniform(0.5, 0.6) 
                     await asyncio.sleep(delay_time)
                     
                     sent_msg = await event.client.send_message(target_group, catch_command)
@@ -177,19 +176,35 @@ async def catch_success_forwarder_handler(event):
     if event.sender_id == SPAWN_BOT_ID and event.text:
         text_content = event.text
         
-        # ⚡ [FIXED] အောင်မြင်မှုစာသား Unicode အလှများကိုပါ ထည့်သွင်းစစ်ဆေးခြင်း
         is_success_msg = any(trigger in text_content or trigger in text_content.upper() for trigger in [
             "YOU GOT A NEW CHARACTER!", 
+            "%sOU GOT A NEW CHARACTER!" % "ʏ", # Unicode compatibility safe check
             "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!", 
             "NORTHROP", 
             "NORDSTROM"
         ])
         
         if is_success_msg:
+            # ⚡ [FIXED] လက်ရှိ အလုပ်လုပ်နေတဲ့ Userbot အကောင့်ကိုယ်တိုင်ကို မန်းရှင်းခေါ်ထားတာ သေချာမှသာ Forward လုပ်မည့်စနစ်
+            client_id = getattr(event.client, 'me_id', None)
+            is_me_mentioned = False
+            
+            # ၁။ Telethon ရဲ့ Built-in Mention စစ်ချက် (Username Mention အတွက်)
             if event.message.mentioned:
+                is_me_mentioned = True
+            
+            # ၂။ Text Mention Entity ထဲမှာ မိမိရဲ့ User ID တကယ်ပါမပါ သေချာအောင် ထပ်ဆင့် Double-Check စစ်ခြင်း
+            if not is_me_mentioned and event.message.entities:
+                for entity in event.message.entities:
+                    if hasattr(entity, 'user_id') and entity.user_id == client_id:
+                        is_me_mentioned = True
+                        break
+                        
+            # မိမိအကောင့်ကို တကယ်မန်းရှင်းခေါ်ပြီး ဂုဏ်ပြုစာပို့ထားတာ ဟုတ်မှသာ SPECIFIC_GROUP ဆီ Forward လှမ်းတင်မည်
+            if is_me_mentioned:
                 try:
                     await event.message.forward_to(SPECIFIC_GROUP)
-                    print("📦 Forwarded success catch card report to SPECIFIC_GROUP.")
+                    print(f"📦 [Account: {client_id}] Successfully forwarded caught card report to SPECIFIC_GROUP.")
                 except Exception as e:
                     print(f"❌ Success Card Forward Error: {e}")
 
@@ -204,11 +219,9 @@ async def start_new_userbot(session_str):
         client = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
         await client.start()
         
-        # Client ID အား ကြိုတင် Cache ပြုလုပ်ခြင်း
         me = await client.get_me()
         client.me_id = me.id
         
-        # အကောင့်တစ်ခုချင်းစီအတွက် Event Handlers များကို Bind လုပ်ခြင်း
         client.add_event_handler(spawn_detector_handler, events.NewMessage())
         client.add_event_handler(hint_solver_handler, events.NewMessage())
         client.add_event_handler(catch_success_forwarder_handler, events.NewMessage())
