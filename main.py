@@ -13,8 +13,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # ⚙️ CONFIGURATION (Credentials)
 # ==========================================
 MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
-APP_ID = 39584681
-APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
+APP_ID = 31566870
+APP_HASH = '579663bdeae6426ca3c7e9feb3f9ca35'
 BOT_TOKEN = '8111794244:AAGpkLE7h5x_IYFvjkVCbJosDC1TFbCGxcQ'
 
 OWNER_ID = 6015356597
