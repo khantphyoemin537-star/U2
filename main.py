@@ -149,7 +149,7 @@ async def spawn_detector_handler(event):
                 return  
 
             # 1. ⚡ 🔵 🟣 🟠 ပါဝင်လာပါက မည်သည့်အလုပ်မှ မလုပ်ဘဲ လုံးဝ ငြိမ်နေစေရန်
-            if any(emoji in event.text for emoji in ["🔵", "🟣", "🟠"]):
+            if any(emoji in event.text for emoji in ["🔵", "🟣", "🟠","🟡"]):
                 return  
 
             # 2. ⚡ ကျန်တဲ့ အီမိုဂျီအမျိုးအစားအားလုံးအတွက် အလုပ်လုပ်မည့်အပိုင်း
