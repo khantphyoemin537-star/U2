@@ -4,10 +4,10 @@ import random
 import time
 import logging
 import re  # 👈 Catch Command များကို Regex ဖြင့် တိကျစွာဆွဲထုတ်ရန်
-from telethon import TelegramClient, events, errors, functions, Button  # 👈 [UPDATED] Button အား ထည့်သွင်းထားသည်
+from telethon import TelegramClient, events, errors, functions, Button  # 👈 Button အား ထည့်သွင်းထားသည်
 from telethon.sessions import StringSession
 from motor.motor_asyncio import AsyncIOMotorClient
-from deep_translator import GoogleTranslator  # 👈 [NEW] ဘာသာပြန်စနစ်အတွက် သွင်းထားသည်
+from deep_translator import GoogleTranslator  # 👈 ဘာသာပြန်စနစ်အတွက် သွင်းထားသည်
 
 # ==========================================
 # ⚙️ CONFIGURATION (Credentials)
@@ -17,7 +17,7 @@ APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
 BOT_TOKEN = '8616292394:AAHDrxaMCvsUiVf985mUCjCQSA7LN4psHE0'
 
-OWNER_ID = 8237842585
+OWNER_ID = 6226241065
 SPECIFIC_GROUP = -1003834579058
 
 # 🎯 NEW CHAT & BOT CONFIGURATIONS
@@ -30,23 +30,23 @@ spawn_tracker = {}            # Waifu Chat ထဲက ID တွေကို မ�
 last_spawn_chat_id = None     # Hint Bot က Reply မပြန်ခဲ့ရင် သုံးမယ့် Fallback Group ID
 HINT_REGEX = re.compile(r"(/catch\s+[^\n]+)") 
 is_catch_stopped = False      # OWNER က Manual ထိန်းချုပ်ရန် စတိတ် (Default: အလုပ်လုပ်မည်)
+is_active = False             # Auto-Reply State
 SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]     # Slot Game ပြေးကွက် သင်္ကေတများ
 
 # MongoDB Setup
 client_mongo = AsyncIOMotorClient(MONGO_URI)
 db = client_mongo["telegram_bot"]  
 tomboy_col = db["tomboy_col"]  
-reply_save_col = db["reply_save_col"]  # 👈 [FIXED] Startup Error မတက်စေရန် ထည့်သွင်းတည်ဆောက်ထားသည်
-slot_col = db["slot_col"]              # 👈 [NEW] Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
+reply_save_col = db["reply_save_col"]  
+slot_col = db["slot_col"]              # Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
 
-# 💡 Python 3.10+ အထက်အတွက် Event Loop ကြိုတင်ဆောက်ပေးရန်
+# 💡 Python 3.10+ နှင့် Render အတွက် Event Loop ကြိုတင်တည်ဆောက်ခြင်း
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-# Initialize Official Bot Client (loop ကိုပါ Parameter ထဲ ထည့်ပေးလိုက်ပါ)
+# Initialize Official Bot Client
 bot = TelegramClient('official_bot_session', APP_ID, APP_HASH, loop=loop)
 userbot = None  
-
 
 # ==========================================
 # 💾 ASYNC MONGODB SLOT WALLET DATABASE HELPERS
@@ -93,7 +93,7 @@ async def delete_catch_message_delayed(client, chat_id, msg_id):
         print(f"❌ Failed to delete /catch message: {e}")
 
 # ==========================================
-# ⚔️ NEW ANIME SPAWN DETECTOR & CATCHER HANDLERS (ULTRA SPEED OPTIMIZED)
+# ⚔️ NEW ANIME SPAWN DETECTOR & CATCHER HANDLERS
 # ==========================================
 async def spawn_detector_handler(event):
     global last_spawn_chat_id, spawn_tracker
@@ -103,7 +103,7 @@ async def spawn_detector_handler(event):
             if event.chat_id in [-1001947407821, -1003067509601]:
                 return  
 
-            if any(emoji in event.text for emoji in ["🔵", "🟣", "🟠","🟡"]):
+            if any(emoji in event.text for emoji in ["🔵", "🟣"]):
                 return  
 
             orig_chat_id = event.chat_id
@@ -156,15 +156,40 @@ async def hint_solver_handler(event):
 
 async def catch_success_forwarder_handler(event):
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜါရါᴄᴛᴇʀ!" in event.text and event.message.mentioned:
+        # 1. Spawn Bot ရဲ့ စာထဲမှာ trigger စာသား ပါမပါ အရင်စစ်မယ်
+        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text:
             try:
-                await event.message.forward_to(SPECIFIC_GROUP)
-                print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
+                # 2. လက်ရှိ Userbot ရဲ့ Profile အချက်အလက်ကို Dynamic ဆွဲထုတ်မယ် (နာမည်ပြောင်းလည်း အလုပ်လုပ်အောင်လို့ပါ)
+                me = await event.client.get_me()
+                first_name = me.first_name.lower() if me.first_name else ""
+                last_name = me.last_name.lower() if me.last_name else ""
+                full_name = f"{first_name} {last_name}".strip()
+                username = me.username.lower() if me.username else ""
+                
+                # စာလုံး အကြီး/အသေး မရွေး မိစေရန် lower() ပြောင်းစစ်မယ်
+                text_lower = event.text.lower()
+                
+                # 3. First Name, Full Name သို့မဟုတ် Username တစ်ခုခု စာထဲမှာ ပါဝင်နေသလား စစ်ဆေးခြင်း
+                is_own_card = False
+                if first_name and first_name in text_lower:
+                    is_own_card = True
+                elif full_name and full_name in text_lower:
+                    is_own_card = True
+                elif username and username in text_lower:
+                    is_own_card = True
+                elif event.message.mentioned: # Backup အနေနဲ့ Bot က Tag ခေါ်ရင်လည်း အလုပ်လုပ်မယ်
+                    is_own_card = True
+                    
+                # မိမိကတ် ဟုတ်တယ်ဆိုရင် Specific Group ထဲ Forward လှမ်းပို့မယ်
+                if is_own_card:
+                    await event.message.forward_to(SPECIFIC_GROUP)
+                    print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
+                    
             except Exception as e:
                 print(f"❌ Success Card Forward Error: {e}")
 
 # ==========================================
-# 📢 USERBOT MASS BROADCAST SYSTEM (ANTI-LOOP & ANTI-FLOOD)
+# 📢 USERBOT MASS BROADCAST SYSTEM
 # ==========================================
 async def mass_broadcast_handler(event):
     if event.text and event.text.strip() == '/ပို့' and event.is_reply:
@@ -388,7 +413,7 @@ async def translate_to_english(event):
         await event.reply("⚠️ ဘာသာပြန်ရတာ အဆင်မပြေဖြစ်သွားပါတယ်။ ခဏနေမှ ပြန်ကြိုးစားကြည့်ပါ။")
 
 # ========================================================
-# 🎰 SYSTEM 4: TELETHON PORTED SLOT GAME
+# 🎰 SYSTEM 4: TELETHON PORTED SLOT GAME (WITH ANIMATION)
 # ========================================================
 @bot.on(events.NewMessage(pattern=r'(?i)^/balance'))
 async def balance_handler(event):
@@ -419,7 +444,23 @@ async def slot_handler(event):
         await event.reply("❌ **Not enough balance.**")
         return
 
+    # 🔒 Exploit Protection: လည်နေတုန်း ထပ်မနှိပ်နိုင်အောင် ငွေကို DB ထဲမှာ ကြိုနှုတ်ထားမည်
     balance -= bet
+    await set_balance(user_id, balance)
+
+    # 🔄 Initial Spinning Message
+    status_msg = await event.reply("🎰 **[ 🔄 | 🔄 | 🔄 ]**\n\n*Reels are spinning...* 🎰")
+    
+    # 🎬 Spin Animation Loop
+    for _ in range(3):
+        await asyncio.sleep(0.5)
+        fake_reels = [random.choice(SYMBOLS) for _ in range(3)]
+        try:
+            await status_msg.edit(f"🎰 **[ {' | '.join(fake_reels)} ]**\n\n*Spinning...* 🔄")
+        except Exception:
+            pass
+
+    # Real Spin Result Calculation
     reels = [random.choice(SYMBOLS) for _ in range(3)]
     payout = 0
 
@@ -433,12 +474,22 @@ async def slot_handler(event):
     balance += payout
     await set_balance(user_id, balance)
 
-    await event.reply(
-        f"🎰 **[ {' | '.join(reels)} ]**\n\n"
-        f"💵 **Bet:** {bet:,} MMK\n"
-        f"🎉 **Win:** {payout:,} MMK\n"
-        f"💰 **Balance:** {balance:,} MMK"
-    )
+    win_status = f"🎉 **Win:** +{payout:,} MMK" if payout > 0 else "😭 **You Lost!**"
+    
+    try:
+        await status_msg.edit(
+            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
+            f"💵 **Bet:** {bet:,} MMK\n"
+            f"{win_status}\n"
+            f"💰 **Balance:** {balance:,} MMK"
+        )
+    except Exception:
+        await event.reply(
+            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
+            f"💵 **Bet:** {bet:,} MMK\n"
+            f"{win_status}\n"
+            f"💰 **Balance:** {balance:,} MMK"
+        )
 
 @bot.on(events.NewMessage(pattern=r'(?i)^/deposit(?:\s+(\d+)\s+(\d+))?'))
 async def deposit_handler(event):
@@ -474,25 +525,41 @@ async def withdraw_handler(event):
     await set_balance(target_user_id, balance - amount)
     await event.reply(f"✅ **Removed {amount:,} MMK from {target_user_id}**")
 
+# 🔮 OWNER ONLY BLESS COMMAND
+@bot.on(events.NewMessage(pattern=r'(?i)^/bless(?:\s+(\d+))?'))
+async def bless_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1):
+        await event.reply("🔮 **Usage:** `/bless <amount>`")
+        return
+    amount = int(match.group(1))
+    
+    balance = await get_balance(OWNER_ID)
+    await set_balance(OWNER_ID, balance + amount)
+    await event.reply(f"✨ **Blessing Received!** Added {amount:,} MMK to your own wallet. 🔮")
+
+# ⚡ [FIXED] CLEAN & READABLE ENGLISH TEXT FOR /START
 @bot.on(events.NewMessage(pattern=r'(?i)^/start$'))
 async def general_start_handler(event):
     """ အထွေထွေ အသုံးပြုသူများအတွက် Start Menu လမ်းညွှန် """
     if event.chat_id == SPECIFIC_GROUP and event.sender_id == OWNER_ID:
-        return  # Owner ရဲ့ Sniper Command /start နှင့် မရှုပ်စေရန် ကျော်မည်
+        return  
         
     user_id = event.sender_id
-    await get_balance(user_id)  # DB ထဲ အကောင့်ဖွင့်ပေးခြင်း
+    await get_balance(user_id)  
     user = await event.get_sender()
     first_name = user.first_name if user else "User"
     
     welcome_text = (
-       f"🎰 ᴡᴇʟᴄᴏᴍᴇ {first_name}!\n\n"
-       f"ʜᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ꜰᴇᴀᴛᴜʀᴇs ᴀᴠᴀɪʟᴀʙʟᴇ ɪɴ ᴛʜɪs ʙᴏᴛ:\n\n"
-       f"🔢 ᴄᴀʟᴄᴜʟᴀᴛᴏʀ: ᴛʏᴘᴇ /calc ᴛᴏ ᴜsᴇ ᴛʜᴇ ɪɴᴛᴇʀᴀᴄᴛɪᴠᴇ ᴘᴀɴᴇʟ, ᴏʀ sɪᴍᴘʟʏ sᴇɴᴅ ᴀ ᴍᴀᴛʜ ᴇxᴘʀᴇssɪᴏɴ (ᴇ.ɢ., 5+5+10) ꜰᴏʀ ᴀɴ ɪɴsᴛᴀɴᴛ ʀᴇsᴜʟᴛ.\n"
-       f"🔤 ᴛʀᴀɴsʟᴀᴛᴏʀ: ᴜsᴇ /tr <ᴛᴇxᴛ> ᴏʀ ʀᴇᴘʟʏ ᴛᴏ ᴀɴʏ ᴍᴇssᴀɢᴇ ᴡɪᴛʜ /tr ᴛᴏ ᴛʀᴀɴsʟᴀᴛᴇ ɪᴛ ɪɴᴛᴏ ᴇɴɢʟɪsʜ.\n"
-       f"🎰 sʟᴏᴛ ɢᴀᴍᴇ:\n"
-       f"• /slot <ᴀᴍᴏᴜɴᴛ> - ᴘʟᴀʏ ᴛʜᴇ sʟᴏᴛ ᴍᴀᴄʜɪɴᴇ\n"
-       f"• /balance - ᴄʜᴇᴄᴋ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ ᴡᴀʟʟᴇᴛ ʙᴀʟᴀɴᴄᴇ"
+       f"🎰 **Welcome {first_name}!**\n\n"
+       f"Here are the features available in this bot:\n\n"
+       f"🔢 **Calculator:** Type `/calc` to use the interactive panel, or simply send a math expression (e.g., `5+5+10`) for an instant result.\n"
+       f"🔤 **Translator:** Use `/tr <text>` or reply to any message with `/tr` to translate it into English.\n"
+       f"🎰 **Slot Game:**\n"
+       f"• `/slot <amount>` - Play the slot machine\n"
+       f"• `/balance` - Check your current wallet balance"
     )  
     await event.reply(welcome_text)
 
@@ -501,7 +568,7 @@ async def general_start_handler(event):
 # ==========================================
 @bot.on(events.NewMessage(chats=SPECIFIC_GROUP))
 async def handle_bot_commands(event):
-    global is_active, userbot, is_scraping, is_talker_active, is_catch_stopped
+    global is_active, userbot, is_catch_stopped
     
     if event.sender_id != OWNER_ID:
         return
@@ -537,8 +604,7 @@ async def handle_bot_commands(event):
             await userbot.start()
             await userbot.get_dialogs()
             
-            # Register Handlers
-            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
+            # Register Handlers (NameError ဖြစ်စေမည့် မရှိသော function အား ဖယ်ရှားထားသည်)
             userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
             userbot.add_event_handler(hint_solver_handler, events.NewMessage())
             userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
@@ -555,7 +621,6 @@ async def handle_bot_commands(event):
     elif cmd == "/start":
         is_catch_stopped = False
         await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
-        asyncio.create_task(scrape_history_task())
         return
 
 # ==========================================
@@ -588,7 +653,6 @@ async def startup():
             await userbot.get_dialogs()
             
             # Register Handlers at Startup
-            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
             userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
             userbot.add_event_handler(hint_solver_handler, events.NewMessage())
             userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
@@ -605,6 +669,5 @@ async def startup():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    # 💡 asyncio.run() အစား အပေါ်က ဆောက်ထားတဲ့ loop နှင့် ပတ်ရန်
+    # 💡 Render ၏ Python 3.14 Environment အတွက် Event Loop နှင့် ပတ်ခြင်း
     loop.run_until_complete(startup())
-    
