@@ -1,4 +1,4 @@
-telethon
-pymongo
-dnspython
-motor
+Telethon==1.35.0
+motor==3.3.2
+pymongo==4.6.1
+deep-translator==1.11.4
