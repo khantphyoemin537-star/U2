@@ -4,14 +4,15 @@ import random
 import time
 import logging
 import re  # 👈 Catch Command များကို Regex ဖြင့် တိကျစွာဆွဲထုတ်ရန်
-from telethon import TelegramClient, events, errors, functions
+from telethon import TelegramClient, events, errors, functions, Button  # 👈 [UPDATED] Button အား ထည့်သွင်းထားသည်
 from telethon.sessions import StringSession
 from motor.motor_asyncio import AsyncIOMotorClient
+from deep_translator import GoogleTranslator  # 👈 [NEW] ဘာသာပြန်စနစ်အတွက် သွင်းထားသည်
 
 # ==========================================
 # ⚙️ CONFIGURATION (Credentials)
 # ==========================================
-MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
+MONGO_URI = "mongodb+srv://kkt:944PJsFRda4Tcr3C@cluster0.kb5fzfl.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
 BOT_TOKEN = '8616292394:AAHDrxaMCvsUiVf985mUCjCQSA7LN4psHE0'
@@ -28,16 +29,34 @@ WAIFU_CHAT_ID = -1003834579058
 spawn_tracker = {}            # Waifu Chat ထဲက ID တွေကို မူရင်း Group ID နဲ့ ချိတ်ဆက်ပေးမယ့် မြန်နှုန်းမြင့် Map
 last_spawn_chat_id = None     # Hint Bot က Reply မပြန်ခဲ့ရင် သုံးမယ့် Fallback Group ID
 HINT_REGEX = re.compile(r"(/catch\s+[^\n]+)") 
-is_catch_stopped = False      # 👈 [NEW] OWNER က Manual ထိန်းချုပ်ရန် စတိတ် (Default: အလုပ်လုပ်မည်)
+is_catch_stopped = False      # OWNER က Manual ထိန်းချုပ်ရန် စတိတ် (Default: အလုပ်လုပ်မည်)
+SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]     # Slot Game ပြေးကွက် သင်္ကေတများ
 
 # MongoDB Setup
 client_mongo = AsyncIOMotorClient(MONGO_URI)
 db = client_mongo["telegram_bot"]  
-tomboy_col = db["tomboy_col"]  # 👈 [UPDATED] config_col မှ tomboy_col သို့ နာမည်ပြောင်းလဲထားသည့်အပိုင်း
+tomboy_col = db["tomboy_col"]  
+reply_save_col = db["reply_save_col"]  # 👈 [FIXED] Startup Error မတက်စေရန် ထည့်သွင်းတည်ဆောက်ထားသည်
+slot_col = db["slot_col"]              # 👈 [NEW] Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
 
 # Initialize Official Bot Client
 bot = TelegramClient('official_bot_session', APP_ID, APP_HASH)
 userbot = None  
+
+# ==========================================
+# 💾 ASYNC MONGODB SLOT WALLET DATABASE HELPERS
+# ==========================================
+async def get_balance(user_id):
+    """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB မှ ဆွဲထုတ်ရန် (မရှိပါက ၁ သောင်း အလကားပေးမည်) """
+    doc = await slot_col.find_one({"user_id": user_id})
+    if not doc:
+        await slot_col.insert_one({"user_id": user_id, "balance": 10000})
+        return 10000
+    return doc.get("balance", 10000)
+
+async def set_balance(user_id, amount):
+    """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB တွင် အသစ်ပြင်ဆင်သိမ်းဆည်းရန် """
+    await slot_col.update_one({"user_id": user_id}, {"$set": {"balance": amount}}, upsert=True)
 
 # ==========================================
 # 🌍 DUMMY HTTP SERVER FOR RENDER HEALTH CHECK
@@ -59,7 +78,7 @@ async def start_dummy_web_server():
     except Exception as e:
         print(f"❌ Failed to start Dummy Web Server: {e}")
 
-# ⏱️ [NEW] /catch command အား ၁ စက္ကန့်အကြာတွင် အလိုအလျောက် ပြန်ဖျက်ပေးမည့် သီးသန့် Task
+# ⏱️ /catch command အား ၁ စက္ကန့်အကြာတွင် အလိုအလျောက် ပြန်ဖျက်ပေးမည့် သီးသန့် Task
 async def delete_catch_message_delayed(client, chat_id, msg_id):
     try:
         await asyncio.sleep(1)
@@ -73,30 +92,22 @@ async def delete_catch_message_delayed(client, chat_id, msg_id):
 # ==========================================
 async def spawn_detector_handler(event):
     global last_spawn_chat_id, spawn_tracker
-    """ Spawn Bot က ပုံ/ဗီဒီယိုနှင့် စာပို့လာပါက ဖမ်းဆီး၍ Forward ပို့မည့်စနစ် """
     if event.sender_id == SPAWN_BOT_ID and event.text:
         if "ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!" in event.text:
             
-            # 🚫 Ban ခံရခြင်းမှ ကာကွယ်ရန် သတ်မှတ်ထားသော Group ID များဖြစ်ပါက လုံးဝ ငြိမ်နေစေရန်
             if event.chat_id in [-1001947407821, -1003067509601]:
                 return  
 
-            # 1. ⚡ 🔵 🟣 🟠 ပါဝင်လာပါက မည်သည့်အလုပ်မှ မလုပ်ဘဲ လုံးဝ ငြိမ်နေစေရန်
             if any(emoji in event.text for emoji in ["🔵", "🟣", "🟠","🟡"]):
                 return  
 
-            # 2. ⚡ ကျန်တဲ့ အီမိုဂျီအမျိုးအစားအားလုံးအတွက် အလုပ်လုပ်မည့်အပိုင်း
             orig_chat_id = event.chat_id
             last_spawn_chat_id = orig_chat_id  
             
             try:
-                # Waifu Chat ထံ တိုက်ရိုက် Forward ပို့ခြင်း
                 fwd_msg = await event.message.forward_to(WAIFU_CHAT_ID)
-                
-                # Forward ပြီးတာနဲ့ /waifu လို့ ချက်ချင်း Reply ပြန်အော်မည်
                 reply_msg = await fwd_msg.reply("/waifu")
                 
-                # Hint Solver အတွက် ID များကို အမြန်မှတ်သားခြင်း
                 spawn_tracker[fwd_msg.id] = orig_chat_id
                 spawn_tracker[reply_msg.id] = orig_chat_id
                 
@@ -106,12 +117,9 @@ async def spawn_detector_handler(event):
             except Exception:
                 pass
 
-
 async def hint_solver_handler(event):
     global last_spawn_chat_id, spawn_tracker, is_catch_stopped
-    """ Hint ပေးသော Bot ထံမှ /catch command ကို copy ယူပြီး မူရင်း Group ဆီသို့ အမြန်လှမ်းပို့မည့်စနစ် """
     
-    # 🛑 [NEW] OWNER က stop ထားပါက /catch သွားမပို့တော့ဘဲ Skip မည်
     if is_catch_stopped:
         return
 
@@ -133,23 +141,17 @@ async def hint_solver_handler(event):
                     async with event.client.action(target_group, 'typing'):
                         await asyncio.sleep(delay_time)
                         
-                    # 🎯 /catch လှမ်းပို့ပြီး ပို့လိုက်သော message object ကို ဖမ်းယူခြင်း
                     sent_msg = await event.client.send_message(target_group, catch_command)
                     print(f"🎯 Caught character with delay {delay_time:.2f}s")
                     
-                    # 🗑️ [NEW] ပို့ပြီးတာနဲ့ ၁ စက္ကန့်အကြာမှာ ထို /catch မက်ဆေ့ချ်ကို ပြန်ဖျက်ခိုင်းခြင်း
                     asyncio.create_task(delete_catch_message_delayed(event.client, target_group, sent_msg.id))
                     
                 except Exception as e:
                     print(f"❌ Catch Error: {e}")
 
-# 📦 [UPDATED] မိမိကိုယ်တိုင် ဖမ်းမိတဲ့ ကတ် Report များကိုသာ Specific Group ထံ Forward ပေးမည့်စနစ်
 async def catch_success_forwarder_handler(event):
-    """ Spawn Bot က ကတ်မိသွားလို့ ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ! ဟု ပို့လာပြီး မိမိကို Mention ခေါ်ထားမှသာ Forward ပေးမည် """
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        
-        # 🔍 စာသားထဲမှာ ပါဝင်ရမည့်အပြင် event.message.mentioned (မိမိအကောင့်ကို Tag ခေါ်ထားခြင်း) ဖြစ်မှသာ အလုပ်လုပ်မည်
-        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text and event.message.mentioned:
+        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜါရါᴄᴛᴇʀ!" in event.text and event.message.mentioned:
             try:
                 await event.message.forward_to(SPECIFIC_GROUP)
                 print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
@@ -202,6 +204,295 @@ async def mass_broadcast_handler(event):
             await status_msg.edit(report_text)
 
 # ==========================================
+# ⚡ SYSTEM 1: AUTO-TEXT CALCULATOR
+# ==========================================
+@bot.on(events.NewMessage)
+async def auto_text_calculator(event):
+    if event.text and event.text.startswith('/'):
+        return
+        
+    text = event.text.strip() if event.text else ""
+    if not text:
+        return
+
+    math_expr = text.replace("÷", "/").replace("×", "*").replace("^", "**")
+
+    if re.match(r'^[0-9.+\-*/()%\s]+$', math_expr) and any(op in math_expr for op in "+-*/%"):
+        try:
+            if "**" in math_expr and len(math_expr) > 20:
+                return
+
+            result = eval(math_expr, {"__builtins__": None}, {})
+
+            if isinstance(result, float) and result.is_integer():
+                result = int(result)
+
+            reply_text = (
+                f"`{text} = {result}`\n\n"
+                f"📣 For support - @Rashxdl"
+            )
+            await event.reply(reply_text)
+            
+        except Exception:
+            pass
+
+# ==========================================
+# ⚡ SYSTEM 2: INTERACTIVE CALCULATOR (INLINE)
+# ==========================================
+def calc_keyboard(user_id):
+    return [
+        [Button.inline("C", f"C_{user_id}"), Button.inline("⌫", f"back_{user_id}"), Button.inline("(", f"(_{user_id}"), Button.inline(")", f")_{user_id}")],
+        [Button.inline("7", f"7_{user_id}"), Button.inline("8", f"8_{user_id}"), Button.inline("9", f"9_{user_id}"), Button.inline("÷", f"/_{user_id}")],
+        [Button.inline("4", f"4_{user_id}"), Button.inline("5", f"5_{user_id}"), Button.inline("6", f"6_{user_id}"), Button.inline("×", f"*_{user_id}")],
+        [Button.inline("1", f"1_{user_id}"), Button.inline("2", f"2_{user_id}"), Button.inline("3", f"3_{user_id}"), Button.inline("-", f"-_{user_id}")],
+        [Button.inline("0", f"0_{user_id}"), Button.inline(".", f"._{user_id}"), Button.inline("=", f"=_{user_id}"), Button.inline("+", f"+_{user_id}")]
+    ]
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/calc'))
+async def start_calc(event):
+    user_id = event.sender_id
+    user = await event.get_sender()
+    first_name = user.first_name if user else "User"
+    
+    text = (
+        f"📱 **INTERACTIVE CALCULATOR**\n"
+        f"👤 **Owner:** [{first_name}](tg://user?id={user_id})\n"
+    )
+    if event.is_private:
+        text += f"💼 For business - @Rashxdl\n💡 Use \" + - * / \"\n"
+        
+    text += (
+        f"🔢 **Expression:** `0`\n\n"
+        f"📣 For support - @Rashxdl"
+    )
+    await event.respond(text, buttons=calc_keyboard(user_id))
+
+@bot.on(events.CallbackQuery)
+async def handle_calc(event):
+    data = event.data.decode('utf-8')
+    msg = await event.get_message()
+    
+    if "_" in data:
+        action, allowed_user_id = data.split("_", 1)
+        allowed_user_id = int(allowed_user_id)
+    else:
+        action = data
+        allowed_user_id = None
+
+    if allowed_user_id and event.sender_id != allowed_user_id:
+        await event.answer("⚠️ ဒီ Calculator က တခြားသူ ဖွင့်ထားတာမို့လို့ မင်းနှိပ်လို့မရပါဘူးခင်ဗျာ။", alert=True)
+        return
+    
+    match = re.search(r'`([^`]*)`', msg.text)
+    if match:
+        current_expr = match.group(1).strip()
+    else:
+        current_expr = "0"
+
+    if current_expr == "0":
+        current_expr = ""
+
+    if action == "C":
+        new_expr = "0"
+    elif action == "back":
+        new_expr = current_expr[:-1] if len(current_expr) > 0 else "0"
+        if not new_expr:
+            new_expr = "0"
+    elif action == "=":
+        if "=" in current_expr or "Error" in current_expr:
+            await event.answer()
+            return
+        try:
+            math_expr = current_expr.replace("÷", "/").replace("×", "*")
+            if any(char not in "0123456789+-*/(). " for char in math_expr):
+                raise ValueError()
+            result = eval(math_expr, {"__builtins__": None}, {})
+            new_expr = f"{current_expr} = {result}"
+        except Exception:
+            new_expr = "Error"
+    else:
+        if "Error" in current_expr or "=" in current_expr:
+            if action in ["+", "-", "/", "*"]:
+                try:
+                    current_expr = current_expr.split("=")[1].strip()
+                except:
+                    current_expr = ""
+            else:
+                current_expr = ""
+        new_expr = current_expr + action
+
+    display_expr = new_expr.replace("/", "÷").replace("*", "×")
+    if not display_expr:
+        display_expr = "0"
+
+    try:
+        lines = msg.text.split("\n")
+        owner_line = [l for l in lines if "Owner:" in l][0]
+    except Exception:
+        owner_line = "👤 **Owner:** User"
+
+    new_text = (
+        f"📱 **INTERACTIVE CALCULATOR**\n"
+        f"{owner_line}\n"
+    )
+    if event.is_private:
+        new_text += f"💼 For business - @Rashxdl\n💡 Use \" + - * / \"\n"
+        
+    new_text += (
+        f"🔢 **Expression:** `{display_expr}`\n\n"
+        f"📣 For support - @Rashxdl"
+    )
+
+    if msg.text != new_text:
+        try:
+            await event.edit(new_text, buttons=calc_keyboard(allowed_user_id))
+        except Exception:
+            pass
+    await event.answer()
+
+# ========================================================
+# ⚡ SYSTEM 3: ENGLISH TRANSLATION ENGINE (/tr)
+# ========================================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/tr(.*)'))
+async def translate_to_english(event):
+    text_to_translate = event.pattern_match.group(1).strip()
+    
+    if not text_to_translate and event.is_reply:
+        reply_msg = await event.get_reply_message()
+        if reply_msg and reply_msg.text:
+            text_to_translate = reply_msg.text
+
+    if not text_to_translate:
+        await event.reply(
+            "❌ **အသုံးပြုပုံ:**\n"
+            "1. `/tr မင်္ဂလာပါ` (စာတိုက်ရိုက်ရိုက်ပြီး ပြန်ခြင်း)\n"
+            "2. တခြားသူစာကို Reply ပြန်ပြီး `/tr` ဟု ရိုက်ခြင်း"
+        )
+        return
+
+    try:
+        translated_text = GoogleTranslator(source='auto', target='en').translate(text_to_translate)
+        reply_text = (
+            f"🔤 **Translated to English:**\n\n"
+            f"`{translated_text}`\n\n"
+            f"📣 For support - @Rashxdl"
+        )
+        await event.reply(reply_text)
+    except Exception as e:
+        logging.error(f"Translation Error: {e}")
+        await event.reply("⚠️ ဘာသာပြန်ရတာ အဆင်မပြေဖြစ်သွားပါတယ်။ ခဏနေမှ ပြန်ကြိုးစားကြည့်ပါ။")
+
+# ========================================================
+# 🎰 SYSTEM 4: TELETHON PORTED SLOT GAME
+# ========================================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/balance'))
+async def balance_handler(event):
+    user_id = event.sender_id
+    bal = await get_balance(user_id)
+    await event.reply(f"💰 **Balance:** {bal:,} MMK")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/slot(?:\s+(\d+))?'))
+async def slot_handler(event):
+    args = event.pattern_match.group(1)
+    if not args:
+        await event.reply("🎰 **Usage:** `/slot <amount>`")
+        return
+        
+    try:
+        bet = int(args.strip())
+    except ValueError:
+        await event.reply("❌ **Invalid amount.**")
+        return
+
+    user_id = event.sender_id
+    balance = await get_balance(user_id)
+
+    if bet <= 0:
+        return
+
+    if balance < bet:
+        await event.reply("❌ **Not enough balance.**")
+        return
+
+    balance -= bet
+    reels = [random.choice(SYMBOLS) for _ in range(3)]
+    payout = 0
+
+    if reels == ["7️⃣", "7️⃣", "7️⃣"]:
+        payout = bet * 3
+    elif reels[0] == reels[1] == reels[2]:
+        payout = bet * 2
+    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
+        payout = bet // 2
+
+    balance += payout
+    await set_balance(user_id, balance)
+
+    await event.reply(
+        f"🎰 **[ {' | '.join(reels)} ]**\n\n"
+        f"💵 **Bet:** {bet:,} MMK\n"
+        f"🎉 **Win:** {payout:,} MMK\n"
+        f"💰 **Balance:** {balance:,} MMK"
+    )
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/deposit(?:\s+(\d+)\s+(\d+))?'))
+async def deposit_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1) or not match.group(2):
+        await event.reply("⚠️ **Usage:** `/deposit <user_id> <amount>`")
+        return
+    target_user_id = int(match.group(1))
+    amount = int(match.group(2))
+    
+    balance = await get_balance(target_user_id)
+    await set_balance(target_user_id, balance + amount)
+    await event.reply(f"✅ **Added {amount:,} MMK to {target_user_id}**")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/withdraw(?:\s+(\d+)\s+(\d+))?'))
+async def withdraw_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1) or not match.group(2):
+        await event.reply("⚠️ **Usage:** `/withdraw <user_id> <amount>`")
+        return
+    target_user_id = int(match.group(1))
+    amount = int(match.group(2))
+    
+    balance = await get_balance(target_user_id)
+    if balance < amount:
+        await event.reply("❌ **Insufficient balance.**")
+        return
+        
+    await set_balance(target_user_id, balance - amount)
+    await event.reply(f"✅ **Removed {amount:,} MMK from {target_user_id}**")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/start$'))
+async def general_start_handler(event):
+    """ အထွေထွေ အသုံးပြုသူများအတွက် Start Menu လမ်းညွှန် """
+    if event.chat_id == SPECIFIC_GROUP and event.sender_id == OWNER_ID:
+        return  # Owner ရဲ့ Sniper Command /start နှင့် မရှုပ်စေရန် ကျော်မည်
+        
+    user_id = event.sender_id
+    await get_balance(user_id)  # DB ထဲ အကောင့်ဖွင့်ပေးခြင်း
+    user = await event.get_sender()
+    first_name = user.first_name if user else "User"
+    
+    welcome_text = (
+        f"🎰 ᴡᴇʟᴄᴏᴍᴇ {first_name}!\n\n"
+        f"ʜᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ꜰᴇᴀᴛᴜʀᴇs ᴀᴠᴀɪʟᴀʙʟᴇ ɪɴ ᴛʜɪs ʙᴏᴛ:\n\n"
+        f"🔢 ᴄᴀʟᴄᴜʟᴀᴛᴏʀ: ᴛʏᴘᴇ /calc ᴛᴏ ᴜsᴇ ᴛʜᴇ ɪɴᴛᴇʀᴀᴄᴛɪᴠᴇ ᴘᴀɴᴇʟ, ᴏʀ sɪᴍᴘʟʏ sᴇɴᴅ ᴀ ᴍᴀᴛʜ ᴇxᴘʀᴇssɪᴏɴ (ᴇ.ɢ., 5+5+10) ꜰᴏʀ ᴀɴ ɪɴsᴛᴀɴᴛ ʀᴇsᴜʟᴛ.\n"
+        f"🔤 ᴛʀᴀɴsʟᴀᴛᴏʀ: ᴜsᴇ /tr <ᴛᴇxᴛ> ᴏʀ ʀᴇᴘʟʏ ᴛᴏ ᴀɴʏ ᴍᴇssᴀɢᴇ ᴡɪᴛʜ /tr ᴛᴏ ᴛʀᴀɴsʟᴀᴛᴇ ɪᴛ ɪɴᴛᴏ ᴇɴɢʟɪsʜ.\n"
+        f"🎰 sʟᴏᴛ ɢᴀᴍᴇ:\n"
+        f"• /slot <ᴀᴍᴏᴜɴᴛ> - ᴘʟᴀʏ ᴛʜᴇ sʟᴏᴛ ᴍᴀᴄʜɪɴᴇ\n"
+        f"• /balance - ᴄʜᴇᴄᴋ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ ᴡᴀʟʟᴇᴛ ʙᴀʟᴀɴᴄᴇ"
+    )
+    
+    await event.reply(welcome_text)
+
+# ==========================================
 # 🤖 OFFICIAL BOT COMMAND HANDLERS
 # ==========================================
 @bot.on(events.NewMessage(chats=SPECIFIC_GROUP))
@@ -213,7 +504,6 @@ async def handle_bot_commands(event):
 
     cmd = event.message.text.strip() if event.message.text else ""
 
-    # 🎯 [UPDATED] /string သို့မဟုတ် /tom command နှစ်ခုလုံးကို လက်ခံရန် ပြင်ဆင်ထားပါသည်
     if cmd.startswith("/string") or cmd.startswith("/tom"):
         args = cmd.split(maxsplit=1)
         session_str = None
@@ -226,94 +516,4 @@ async def handle_bot_commands(event):
                 session_str = reply_msg.text.strip()
                 
         if not session_str:
-            await event.reply("❌ **String Session မတွေ့ရှိပါ။**")
-            return
-            
-        # tomboy_col ထဲသို့ တိုက်ရိုက်သိမ်းဆည်းမည်
-        await tomboy_col.update_one(
-            {"key": "string_session"},
-            {"$set": {"value": session_str}},
-            upsert=True
-        )
-        await event.reply("✅ String Session ကို `gasses_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
-        
-        try:
-            if userbot:
-                await userbot.disconnect()
-            userbot = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
-            await userbot.start()
-            await userbot.get_dialogs()
-            
-            # Register Handlers
-            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
-            userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
-            userbot.add_event_handler(hint_solver_handler, events.NewMessage())
-            userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
-            userbot.add_event_handler(catch_success_forwarder_handler, events.NewMessage()) # 👈 [NEW] Success Report Forwarder
-            
-            await event.reply("🚀 Userbot is Live with Manual Sniper Mod!")
-        except Exception as e:
-            await event.reply(f"❌ Userbot အလုပ်မလုပ်ပါ: {e}")
-
-    # 🛑 [NEW] /catch စနစ်အား ကိုယ်တိုင်ပိတ်မည့် Command
-    elif cmd == "/stop":
-        is_catch_stopped = True
-        await event.reply("🛑  `/catch` လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။**\n(Detector နှင့် Forward စနစ်များတော့ ပုံမှန်အတိုင်း အလုပ်လုပ်ပေးနေပါမည်)")
-
-    # ✅ [NEW] /catch စနစ်အား ပြန်လည်စတင်မည့် Command
-    elif cmd == "/start":
-        is_catch_stopped = False
-        await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
-            return
-        asyncio.create_task(scrape_history_task())
-
-
-# ==========================================
-# 🚀 SYSTEM STARTUP LOGIC
-# ==========================================
-async def startup():
-    global is_active, userbot
-    print("⏳ System starting up and loading configurations from MongoDB...")
-    
-    asyncio.create_task(start_dummy_web_server())
-
-    try:
-        deleted = await reply_save_col.delete_many({"$expr": {"$lt": [{"$strLenCP": "$trigger"}, 3]}})
-        if deleted.deleted_count > 0:
-            print(f"🧹 Cleaned up {deleted.deleted_count} short garbage triggers from DB.")
-    except Exception as clean_err:
-        print(f"⚠️ DB Cleanup Warning: {clean_err}")
-
-    status_doc = await tomboy_col.find_one({"key": "bot_status"})
-    if status_doc and status_doc.get("value") == "active":
-        is_active = True
-        print("➡️ Auto-Reply Status: ACTIVE")
-
-    session_doc = await tomboy_col.find_one({"key": "string_session"})
-    if session_doc:
-        try:
-            session_str = session_doc.get("value")
-            userbot = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
-            await userbot.start()
-            await userbot.get_dialogs()
-            
-            # Register Handlers at Startup
-            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
-            userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
-            userbot.add_event_handler(hint_solver_handler, events.NewMessage())
-            userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
-            userbot.add_event_handler(catch_success_forwarder_handler, events.NewMessage()) # 👈 [NEW] Success Report Forwarder  
-            
-            print("🚀 Userbot Session Successfully Loaded from DB!")
-        except Exception as e:
-            print(f"⚠️ Failed to load existing Userbot Session: {e}")
-    else:
-        print("💡 No String Session found in DB yet.")
-
-    await bot.start(bot_token=BOT_TOKEN)
-    print("🤖 Official Bot is running...")
-    await bot.run_until_disconnected()
-
-if __name__ == '__main__':
-    asyncio.run(startup())
-
+            await event.reply("❌ **S
