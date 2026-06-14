@@ -39,9 +39,14 @@ tomboy_col = db["tomboy_col"]
 reply_save_col = db["reply_save_col"]  # 👈 [FIXED] Startup Error မတက်စေရန် ထည့်သွင်းတည်ဆောက်ထားသည်
 slot_col = db["slot_col"]              # 👈 [NEW] Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
 
-# Initialize Official Bot Client
-bot = TelegramClient('official_bot_session', APP_ID, APP_HASH)
+# 💡 Python 3.10+ အထက်အတွက် Event Loop ကြိုတင်ဆောက်ပေးရန်
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# Initialize Official Bot Client (loop ကိုပါ Parameter ထဲ ထည့်ပေးလိုက်ပါ)
+bot = TelegramClient('official_bot_session', APP_ID, APP_HASH, loop=loop)
 userbot = None  
+
 
 # ==========================================
 # 💾 ASYNC MONGODB SLOT WALLET DATABASE HELPERS
@@ -600,4 +605,6 @@ async def startup():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    asyncio.run(startup())
+    # 💡 asyncio.run() အစား အပေါ်က ဆောက်ထားတဲ့ loop နှင့် ပတ်ရန်
+    loop.run_until_complete(startup())
+    
