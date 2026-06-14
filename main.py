@@ -515,4 +515,89 @@ async def handle_bot_commands(event):
                 session_str = reply_msg.text.strip()
                 
         if not session_str:
-            await event.reply("❌ **S
+            await event.reply("❌ **String Session မတွေ့ရှိပါ။**")
+            return
+            
+        await tomboy_col.update_one(
+            {"key": "string_session"},
+            {"$set": {"value": session_str}},
+            upsert=True
+        )
+        await event.reply("✅ String Session ကို `gasses_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
+        
+        try:
+            if userbot:
+                await userbot.disconnect()
+            userbot = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
+            await userbot.start()
+            await userbot.get_dialogs()
+            
+            # Register Handlers
+            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
+            userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
+            userbot.add_event_handler(hint_solver_handler, events.NewMessage())
+            userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
+            userbot.add_event_handler(catch_success_forwarder_handler, events.NewMessage()) 
+            
+            await event.reply("🚀 Userbot is Live with Manual Sniper Mod!")
+        except Exception as e:
+            await event.reply(f"❌ Userbot အလုပ်မလုပ်ပါ: {e}")
+
+    elif cmd == "/stop":
+        is_catch_stopped = True
+        await event.reply("🛑  `/catch` လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။**\n(Detector နှင့် Forward စနစ်များတော့ ပုံမှန်အတိုင်း အလုပ်လုပ်ပေးနေပါမည်)")
+
+    elif cmd == "/start":
+        is_catch_stopped = False
+        await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
+        asyncio.create_task(scrape_history_task())
+        return
+
+# ==========================================
+# 🚀 SYSTEM STARTUP LOGIC
+# ==========================================
+async def startup():
+    global is_active, userbot
+    print("⏳ System starting up and loading configurations from MongoDB...")
+    
+    asyncio.create_task(start_dummy_web_server())
+
+    try:
+        deleted = await reply_save_col.delete_many({"$expr": {"$lt": [{"$strLenCP": "$trigger"}, 3]}})
+        if deleted.deleted_count > 0:
+            print(f"🧹 Cleaned up {deleted.deleted_count} short garbage triggers from DB.")
+    except Exception as clean_err:
+        print(f"⚠️ DB Cleanup Warning: {clean_err}")
+
+    status_doc = await tomboy_col.find_one({"key": "bot_status"})
+    if status_doc and status_doc.get("value") == "active":
+        is_active = True
+        print("➡️ Auto-Reply Status: ACTIVE")
+
+    session_doc = await tomboy_col.find_one({"key": "string_session"})
+    if session_doc:
+        try:
+            session_str = session_doc.get("value")
+            userbot = TelegramClient(StringSession(session_str), APP_ID, APP_HASH)
+            await userbot.start()
+            await userbot.get_dialogs()
+            
+            # Register Handlers at Startup
+            userbot.add_event_handler(handle_userbot_reply, events.NewMessage())
+            userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
+            userbot.add_event_handler(hint_solver_handler, events.NewMessage())
+            userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
+            userbot.add_event_handler(catch_success_forwarder_handler, events.NewMessage()) 
+            
+            print("🚀 Userbot Session Successfully Loaded from DB!")
+        except Exception as e:
+            print(f"⚠️ Failed to load existing Userbot Session: {e}")
+    else:
+        print("💡 No String Session found in DB yet.")
+
+    await bot.start(bot_token=BOT_TOKEN)
+    print("🤖 Official Bot is running...")
+    await bot.run_until_disconnected()
+
+if __name__ == '__main__':
+    asyncio.run(startup())
