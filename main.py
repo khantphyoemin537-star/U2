@@ -14,11 +14,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
-BOT_TOKEN = '8111794244:AAGpkLE7h5x_IYFvjkVCbJosDC1TFbCGxcQ'
+BOT_TOKEN = '8616292394:AAHDrxaMCvsUiVf985mUCjCQSA7LN4psHE0'
 
-OWNER_ID = 6015356597
+OWNER_ID = 8237842585
 SPECIFIC_GROUP = -1003834579058
-COOLDOWN_TIME = 15
 
 # 🎯 NEW CHAT & BOT CONFIGURATIONS
 SPAWN_BOT_ID = 6157455819
@@ -26,13 +25,6 @@ HINT_BOT_ID = 8506436817
 WAIFU_CHAT_ID = -1003834579058
 
 # Global States
-is_active = False
-is_scraping = False
-is_adding_contacts = False  
-user_cooldowns = {}
-is_talker_active = False       
-message_count = 0
-spam_tasks = {}
 spawn_tracker = {}            # Waifu Chat ထဲက ID တွေကို မူရင်း Group ID နဲ့ ချိတ်ဆက်ပေးမယ့် မြန်နှုန်းမြင့် Map
 last_spawn_chat_id = None     # Hint Bot က Reply မပြန်ခဲ့ရင် သုံးမယ့် Fallback Group ID
 HINT_REGEX = re.compile(r"(/catch\s+[^\n]+)") 
@@ -40,12 +32,8 @@ is_catch_stopped = False      # 👈 [NEW] OWNER က Manual ထိန်းခ�
 
 # MongoDB Setup
 client_mongo = AsyncIOMotorClient(MONGO_URI)
-db = client_mongo["telegram_bot"]
-reply_save_col = db["reply_save_col"]
-target_bots_col = db["target_bots"]  
+db = client_mongo["telegram_bot"]  
 tomboy_col = db["tomboy_col"]  # 👈 [UPDATED] config_col မှ tomboy_col သို့ နာမည်ပြောင်းလဲထားသည့်အပိုင်း
-talk_col = db["random_talk"]   
-filters_col = db["filters"]
 
 # Initialize Official Bot Client
 bot = TelegramClient('official_bot_session', APP_ID, APP_HASH)
@@ -71,29 +59,6 @@ async def start_dummy_web_server():
     except Exception as e:
         print(f"❌ Failed to start Dummy Web Server: {e}")
 
-# ==========================================
-# 🗑️ ANTI-FLOOD DELAYED DELETION TASK
-# ==========================================
-async def delete_bot_message_delayed(event, bot_msg_id, cmd_msg_id=0):
-    try:
-        await asyncio.sleep(3)
-        to_delete = [bot_msg_id]
-        if cmd_msg_id:
-            to_delete.append(cmd_msg_id)
-            
-        await event.client.delete_messages(event.chat_id, to_delete)
-        print(f"🗑️ Auto-deleted message {bot_msg_id} after delay.")
-        
-    except errors.rpcerrorlist.FloodWaitError as e:
-        print(f"⚠️ FloodWait Caught! Must wait {e.seconds} seconds.")
-        await asyncio.sleep(e.seconds)
-        try:
-            await event.client.delete_messages(event.chat_id, to_delete)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"❌ Error during delayed deletion: {e}")
-
 # ⏱️ [NEW] /catch command အား ၁ စက္ကန့်အကြာတွင် အလိုအလျောက် ပြန်ဖျက်ပေးမည့် သီးသန့် Task
 async def delete_catch_message_delayed(client, chat_id, msg_id):
     try:
@@ -102,38 +67,6 @@ async def delete_catch_message_delayed(client, chat_id, msg_id):
         print(f"🗑️ Auto-deleted /catch message {msg_id} after 1 second.")
     except Exception as e:
         print(f"❌ Failed to delete /catch message: {e}")
-
-# ==========================================
-# ⚔️ ANTI-FLOOD RAID / SPAM TASK SYSTEM
-# ==========================================
-async def run_raid_spam_task(event, reply_msg_id, chat_id):
-    try:
-        while True:
-            pipeline = [{"$sample": {"size": 1}}]
-            cursor = filters_col.aggregate(pipeline)
-            docs = await cursor.to_list(length=1)
-            
-            if docs:
-                reply_text = docs[0].get("text") or docs[0].get("word") or "🎯"
-                try:
-                    await event.client.send_message(
-                        chat_id, 
-                        reply_text, 
-                        reply_to=reply_msg_id
-                    )
-                    await asyncio.sleep(1.0)
-                    
-                except errors.rpcerrorlist.FloodWaitError as e:
-                    print(f"⚠️ FloodWait မိသွားသဖြင့် {e.seconds} စက္ကန့် စောင့်ဆိုင်းနေသည်။")
-                    await asyncio.sleep(e.seconds)
-                except Exception as e:
-                    print(f"❌ Spam Error: {e}")
-                    await asyncio.sleep(1.0)
-            else:
-                await asyncio.sleep(2.0)
-                
-    except asyncio.CancelledError:
-        print(f"🛑 Chat ID: {chat_id} တွင် Raid လုပ်ငန်းစဉ် ရပ်တန့်ပြီး။")
 
 # ==========================================
 # ⚔️ NEW ANIME SPAWN DETECTOR & CATCHER HANDLERS (ULTRA SPEED OPTIMIZED)
@@ -195,7 +128,7 @@ async def hint_solver_handler(event):
                 if target_group in [-1001947407821, -1003067509601]:
                     return
                 try:
-                    delay_time = random.uniform(0.5, 0.7) 
+                    delay_time = random.uniform(0.3, 0.5) 
                     
                     async with event.client.action(target_group, 'typing'):
                         await asyncio.sleep(delay_time)
@@ -222,148 +155,6 @@ async def catch_success_forwarder_handler(event):
                 print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
             except Exception as e:
                 print(f"❌ Success Card Forward Error: {e}")
-
-
-
-# ==========================================
-# 🧠 USERBOT EVENT HANDLER (COLLECTIVE & RAID SYSTEM)
-# ==========================================
-async def handle_userbot_reply(event):
-    global is_active, user_cooldowns, is_talker_active, message_count, spam_tasks
-    
-    if not event.message or event.message.text is None:
-        return
-
-    cmd = event.message.text.strip()
-
-    if event.out:  
-        if cmd == "သေမယ်နော်" and event.is_reply:
-            if event.chat_id in spam_tasks:
-                spam_tasks[event.chat_id].cancel()
-                
-            reply_msg = await event.get_reply_message()
-            task = asyncio.create_task(run_raid_spam_task(event, reply_msg.id, event.chat_id))
-            spam_tasks[event.chat_id] = task
-            
-            await event.delete()  
-            return
-            
-        elif cmd == "ဖာသည်မသား":
-            if event.chat_id in spam_tasks:
-                spam_tasks[event.chat_id].cancel()
-                del spam_tasks[event.chat_id]
-                
-            await event.delete()  
-            return
-
-    if event.chat_id != SPECIFIC_GROUP:
-        return
-
-    if event.sender_id == OWNER_ID and cmd == "/ဖျက်မည်":
-        if event.is_reply:
-            reply_msg = await event.get_reply_message()
-            reply_sender = await reply_msg.get_sender()
-            
-            if reply_sender and reply_sender.bot:
-                bot_id = reply_sender.id
-                await target_bots_col.update_one(
-                    {"bot_id": bot_id},
-                    {"$set": {"bot_id": bot_id, "username": reply_sender.username}},
-                    upsert=True
-                )
-                await event.reply(f"🎯 Bot ID: `{bot_id}` (@{reply_sender.username}) ကို မှတ်ပြီးပါပြီ။")
-                asyncio.create_task(delete_bot_message_delayed(event, reply_msg.id, event.id))
-                return
-
-    sender = await event.get_sender()
-    if sender and sender.bot:
-        is_target = await target_bots_col.find_one({"bot_id": event.sender_id})
-        if is_target:
-            asyncio.create_task(delete_bot_message_delayed(event, event.id, 0))
-            return
-
-    if is_talker_active:
-        if event.out or (sender and sender.bot):
-            return
-
-        user_text = event.message.text.strip()
-        if not user_text:
-            return
-
-        message_count += 1
-        if message_count >= 8:
-            message_count = 0
-            pipeline = [{"$sample": {"size": 1}}]
-            cursor = talk_col.aggregate(pipeline)
-            random_docs = await cursor.to_list(length=1)
-
-            if random_docs:
-                reply_text = random_docs[0].get("text")
-                if reply_text:
-                    try:
-                        await event.client.send_read_acknowledge(event.chat_id, max_id=event.id)
-                        typing_delay = max(2.0, min(len(reply_text) * 0.1, 5.0))
-                        async with event.client.action(event.chat_id, 'typing'):
-                            await asyncio.sleep(typing_delay)
-                        await event.respond(reply_text)
-                    except Exception as e:
-                        print(f"❌ Talker Error: {e}")
-            return
-
-    if not is_active or event.out or (sender and sender.bot):
-        return
-
-    user_text = event.message.text.strip().lower()
-    if not user_text:
-        return
-
-    user_id = event.sender_id
-    current_time = time.time()
-    if user_id in user_cooldowns and (current_time - user_cooldowns[user_id] < COOLDOWN_TIME):
-        return
-
-    user_cooldowns[user_id] = current_time
-
-    try:
-        reply_text = None
-        match_pipeline = [
-            {"$match": {
-                "$and": [
-                    {"$expr": {"$gte": [{"$strLenCP": "$trigger"}, 3]}},
-                    {"trigger": {"$regex": user_text, "$options": "i"}}
-                ]
-            }},
-            {"$sample": {"size": 1}}
-        ]
-        
-        cursor_match = reply_save_col.aggregate(match_pipeline)
-        matched_docs = await cursor_match.to_list(length=1)
-
-        if matched_docs and matched_docs[0].get("responses"):
-            reply_text = random.choice(matched_docs[0]["responses"])
-        else:
-            if random.random() < 0.20:  
-                pipeline_fallback = [{"$sample": {"size": 1}}]
-                cursor_fallback = reply_save_col.aggregate(pipeline_fallback)
-                random_docs = await cursor_fallback.to_list(length=1)
-                
-                if random_docs and random_docs[0].get("responses"):
-                    reply_text = random.choice(random_docs[0]["responses"])
-                else:
-                    cursor_talk = talk_col.aggregate(pipeline_fallback)
-                    random_talk_docs = await cursor_talk.to_list(length=1)
-                    reply_text = random_talk_docs[0].get("text") if random_talk_docs else None
-            else:
-                return
-
-        if reply_text:
-            await event.client.send_read_acknowledge(event.chat_id, max_id=event.id)
-            async with event.client.action(event.chat_id, 'voice'):
-                await asyncio.sleep(random.uniform(1.5, 3.5))
-            await event.reply(reply_text)
-
-    except Exception as e:
-        print(f"❌ Auto-Reply Error: {e}")
 
 # ==========================================
 # 📢 USERBOT MASS BROADCAST SYSTEM (ANTI-LOOP & ANTI-FLOOD)
@@ -411,76 +202,6 @@ async def mass_broadcast_handler(event):
             await status_msg.edit(report_text)
 
 # ==========================================
-# 📥 USERBOT SCRAPING TASK (Emoji Preserved & 50,000 Limit)
-# ==========================================
-async def scrape_history_task():
-    global is_scraping, userbot
-    if not userbot:
-        await bot.send_message(SPECIFIC_GROUP, "❌ Userbot အသက်မဝင်သေးပါ။ /string အရင်လုပ်ပေးပါ။")
-        return
-
-    is_scraping = True
-    await bot.send_message(SPECIFIC_GROUP, "📥 စာဟောင်းများမှ Reply များကို စတင်မှတ်သားနေပါပြီ...")
-    
-    try:
-        msg_cache = {}
-        total_saved = 0
-        TARGET_LIMIT = 0   
-        FETCH_LIMIT = 0    
-
-        try:
-            async for msg in userbot.iter_messages(SPECIFIC_GROUP, limit=FETCH_LIMIT):
-                if msg and msg.text:
-                    msg_cache[msg.id] = msg.text.strip()
-        except Exception as cache_err:
-            print(f"⚠️ Cache warning: {cache_err}")
-
-        async for msg in userbot.iter_messages(SPECIFIC_GROUP, limit=FETCH_LIMIT):
-            if not is_scraping or total_saved >= TARGET_LIMIT:
-                break
-            
-            try:
-                if msg and msg.reply_to_msg_id and msg.text:
-                    parent_id = msg.reply_to_msg_id
-                    parent_text = msg_cache.get(parent_id)
-                    reply_text = msg.text.strip()
-
-                    if parent_text and reply_text:
-                        trigger = parent_text.lower()
-                        
-                        if (trigger.startswith(('/', '.', 'မှတ်', 'reply')) or 
-                            reply_text.startswith(('/', '.', 'မှတ်', 'reply')) or 
-                            "http" in trigger or "http" in reply_text or "@" in trigger):
-                            continue
-
-                        existing_doc = await reply_save_col.find_one({"trigger": trigger})
-                        if existing_doc:
-                            if reply_text not in existing_doc.get("responses", []):
-                                await reply_save_col.update_one(
-                                    {"trigger": trigger},
-                                    {"$push": {"responses": reply_text}}
-                                )
-                                total_saved += 1
-                        else:
-                            await reply_save_col.insert_one({"trigger": trigger, "responses": [reply_text]})
-                            total_saved += 1
-
-                        if total_saved % 100 == 0:
-                            await bot.send_message(SPECIFIC_GROUP, f"🚀 စာစောင် ပေါင်း {total_saved} ခု DB ထဲ မှတ်ပြီးပါပြီ!")
-                        
-                        await asyncio.sleep(0.04)  
-            except Exception as single_msg_err:
-                print(f"⚠️ Skipped a message due to: {single_msg_err}")
-                continue
-
-        await bot.send_message(SPECIFIC_GROUP, f"🎉 အောင်မြင်စွာ Reply စုစုပေါင်း {total_saved} ခုကို DB ထဲ သိမ်းဆည်းပြီးပါပြီ!")
-    except Exception as e:
-        await bot.send_message(SPECIFIC_GROUP, f"❌ Scraping ပြဿနာတက်ခဲ့သည်: {e}")
-    finally:
-        is_scraping = False
-
-
-# ==========================================
 # 🤖 OFFICIAL BOT COMMAND HANDLERS
 # ==========================================
 @bot.on(events.NewMessage(chats=SPECIFIC_GROUP))
@@ -514,7 +235,7 @@ async def handle_bot_commands(event):
             {"$set": {"value": session_str}},
             upsert=True
         )
-        await event.reply("✅ String Session ကို `tomboy_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
+        await event.reply("✅ String Session ကို `gasses_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
         
         try:
             if userbot:
@@ -537,34 +258,12 @@ async def handle_bot_commands(event):
     # 🛑 [NEW] /catch စနစ်အား ကိုယ်တိုင်ပိတ်မည့် Command
     elif cmd == "/stop":
         is_catch_stopped = True
-        await event.reply("🛑 **Chief! `/catch` လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။**\n(Detector နှင့် Forward စနစ်များတော့ ပုံမှန်အတိုင်း အလုပ်လုပ်ပေးနေပါမည်)")
+        await event.reply("🛑  `/catch` လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။**\n(Detector နှင့် Forward စနစ်များတော့ ပုံမှန်အတိုင်း အလုပ်လုပ်ပေးနေပါမည်)")
 
     # ✅ [NEW] /catch စနစ်အား ပြန်လည်စတင်မည့် Command
     elif cmd == "/start":
         is_catch_stopped = False
-        await event.reply("✅ **Chief! `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
-
-    elif cmd == "/ဟိုက်":
-        is_active = True
-        await tomboy_col.update_one({"key": "bot_status"}, {"$set": {"value": "active"}}, upsert=True)
-        await event.reply("စာလိုက်ထောက်ပီ")
-
-    elif cmd == "/ဟိုက်း":
-        is_active = False
-        await tomboy_col.update_one({"key": "bot_status"}, {"$set": {"value": "inactive"}}, upsert=True)
-        await event.reply("စာလိုက်ထောက်တော့ဘူးမောတယ်")
-
-    elif cmd == "/ပြောမယ်":
-        is_talker_active = True
-        await event.reply("💬 Talker mode activated.")
-     
-    elif cmd == "/မပြောဘူး":
-        is_talker_active = False
-        await event.reply("🔇 Talker mode deactivated.")
-
-    elif cmd == "/replyမှတ်":
-        if is_scraping:
-            await event.reply("⚠️ ယခုအချိန်တွင် စာမှတ်ခြင်းအလုပ် လုပ်ဆောင်နေဆဲဖြစ်သည်!")
+        await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
             return
         asyncio.create_task(scrape_history_task())
 
