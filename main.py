@@ -55,9 +55,9 @@ async def get_balance(user_id):
     """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB မှ ဆွဲထုတ်ရန် (မရှိပါက ၁ သောင်း အလကားပေးမည်) """
     doc = await slot_col.find_one({"user_id": user_id})
     if not doc:
-        await slot_col.insert_one({"user_id": user_id, "balance": 10000})
-        return 10000
-    return doc.get("balance", 10000)
+        await slot_col.insert_one({"user_id": user_id, "balance": 0})
+        return 0
+    return doc.get("balance", 0)
 
 async def set_balance(user_id, amount):
     """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB တွင် အသစ်ပြင်ဆင်သိမ်းဆည်းရန် """
@@ -465,11 +465,11 @@ async def slot_handler(event):
     payout = 0
 
     if reels == ["7️⃣", "7️⃣", "7️⃣"]:
-        payout = bet * 3
+        payout = bet * 5
     elif reels[0] == reels[1] == reels[2]:
         payout = bet * 2
     elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-        payout = bet // 2
+        payout = bet * 1.5
 
     balance += payout
     await set_balance(user_id, balance)
@@ -614,11 +614,11 @@ async def handle_bot_commands(event):
         except Exception as e:
             await event.reply(f"❌ Userbot အလုပ်မလုပ်ပါ: {e}")
 
-    elif cmd == "/stop":
+    elif cmd == "/cstop":
         is_catch_stopped = True
         await event.reply("🛑  `/catch` လုပ်ငန်းစဉ်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။**\n(Detector နှင့် Forward စနစ်များတော့ ပုံမှန်အတိုင်း အလုပ်လုပ်ပေးနေပါမည်)")
 
-    elif cmd == "/start":
+    elif cmd == "/cstart":
         is_catch_stopped = False
         await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
         return
