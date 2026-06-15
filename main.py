@@ -12,7 +12,7 @@ from deep_translator import GoogleTranslator  # 👈 ဘာသာပြန်စ
 # ==========================================
 # ⚙️ CONFIGURATION (Credentials)
 # ==========================================
-MONGO_URI = "mongodb+srv://kkt:944PJsFRda4Tcr3C@cluster0.kb5fzfl.mongodb.net/telegram_bot?appName=Cluster0&tlsAllowInvalidCertificates=true"
+MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
 BOT_TOKEN = '8616292394:AAHDrxaMCvsUiVf985mUCjCQSA7LN4psHE0'
