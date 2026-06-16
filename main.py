@@ -15,7 +15,7 @@ from deep_translator import GoogleTranslator  # 👈 ဘာသာပြန်စ
 MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
-BOT_TOKEN = '8616292394:AAHDrxaMCvsUiVf985mUCjCQSA7LN4psHE0'
+BOT_TOKEN = '8616292394:AAEwH3GPZQRNNck9Er6WK_ksl57n1P0OVHo'
 
 OWNER_ID = 6226241065
 SPECIFIC_GROUP = -1003834579058
@@ -39,7 +39,7 @@ db = client_mongo["telegram_bot"]
 tomboy_col = db["tomboy_col"]  
 reply_save_col = db["reply_save_col"]  
 slot_col = db["slot_col"]              # Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
-
+tomgaygp_col = db["tomgaygp_col"] 
 # 💡 Python 3.10+ နှင့် Render အတွက် Event Loop ကြိုတင်တည်ဆောက်ခြင်း
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -562,7 +562,199 @@ async def general_start_handler(event):
        f"• `/balance` - Check your current wallet balance"
     )  
     await event.reply(welcome_text)
+# =========================================================================
+@bot.on(events.NewMessage)
+async def group_tracker_and_notifier(event):
+    """ Bot ရှိနေသမျှ Group တိုင်းကို စောင့်ကြည့်မှတ်သားပြီး Owner DM သို့ သတင်းပို့မည့် စနစ် """
+    if event.is_private or not event.is_group:
+        return
 
+    chat_id = event.chat_id
+    
+    # 1. Group အချက်အလက်များကို DB ထဲတွင် ရှိ/မရှိ အရင်စစ်ဆေးမည်
+    exists = await tomgaygp_col.find_one({"chat_id": chat_id})
+    if not exists:
+        try:
+            # Group Detail များကို တိကျစွာ ဆွဲထုတ်ခြင်း
+            chat_entity = await event.get_input_chat()
+            full_chat = await bot(functions.channels.GetFullChannelRequest(channel=chat_entity))
+            
+            title = event.chat.title if hasattr(event.chat, 'title') else "Unknown Group"
+            member_count = full_chat.full_chat.participants_count if hasattr(full_chat.full_chat, 'participants_count') else "N/A"
+            
+            # Bot တွင် Admin Permission ပေးထားခြင်း ရှိမရှိ စစ်ဆေးရန်
+            is_admin = "No"
+            invite_link = "Not Available"
+            if event.chat.admin_rights:
+                is_admin = "Yes"
+                # Admin ဖြစ်ပါက Invite Link ဖန်တီး၍ Dynamic ဆွဲထုတ်မည်
+                if event.chat.admin_rights.invite_users:
+                    try:
+                        exported_link = await bot(functions.messages.ExportChatInviteRequest(peer=chat_entity))
+                        invite_link = exported_link.link
+                    except Exception:
+                        pass
+
+            # 2. Database `tomgaygp_col` ထဲသို့ တန်ဖိုးအသစ် ထည့်သွင်းသိမ်းဆည်းမည်
+            await tomgaygp_col.update_one(
+                {"chat_id": chat_id},
+                {
+                    "$set": {
+                        "chat_id": chat_id,
+                        "title": title,
+                        "members": member_count,
+                        "is_admin": is_admin,
+                        "invite_link": invite_link,
+                        "added_at": time.time()
+                    }
+                },
+                upsert=True
+            )
+
+            # 3. Bot Owner ၏ DM သို့ အသေးစိတ် Notification ပေးပို့ခြင်း
+            notif_text = (
+                f"📥 **Bot Added to New Group!**\n\n"
+                f"📛 **Group Name:** {title}\n"
+                f"🆔 **Group ID:** `{chat_id}`\n"
+                f"👥 **Members Count:** `{member_count}`\n"
+                f"⚙️ **Admin Permission:** `{is_admin}`\n"
+                f"🔗 **Invite Link:** {invite_link}"
+            )
+            await bot.send_message(OWNER_ID, notif_text)
+            print(f"✅ Successfully logged & notified group: {title} ({chat_id})")
+
+        except Exception as e:
+            print(f"⚠️ Failed to track group info for {chat_id}: {e}")
+# =========================================================================
+# 🪪 UPDATED: BEAUTIFUL /ID COMMAND HANDLER (NO BOLD TAGS & REPLY/MENTION SUPPORT)
+# =========================================================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/id(?:\\s+([\\w@]+))?'))
+async def beautiful_id_handler(event):
+    """ User ID သို့မဟုတ် Group ID ကို Reply / Mention စနစ်ဖြင့် ပုံစံလှလှလေး ပြသပေးမည့် စနစ် """
+    
+    target_user = None
+    mention_arg = event.pattern_match.group(1)
+
+    # 1. တခြားသူစာကို Reply (စာထောက်) ထားလျှင် ၎င်းလူ၏ အချက်အလက်ကို ယူမည်
+    if event.is_reply:
+        reply_msg = await event.get_reply_message()
+        if reply_msg:
+            target_user = await reply_msg.get_sender()
+            
+    # 2. Username ဖြင့် မန်းရှင်းခေါ်ထားလျှင် (ဥပမာ - /id @username)
+    elif mention_arg:
+        try:
+            target_user = await bot.get_entity(mention_arg)
+        except Exception:
+            await event.reply("ရှာမတွေ့ပါ။ Username မှန်ကန်မှု ရှိမရှိ ပြန်စစ်ဆေးပေးပါ။")
+            return
+            
+    # 3. ဘာမှမပါလျှင် ရိုက်နှိပ်လိုက်သော မိမိကိုယ်တိုင်၏ အချက်အလက်ကို ပြမည်
+    else:
+        target_user = await event.get_sender()
+
+    # User ရဲ့ အချက်အလက်များကို ခွဲထုတ်ခြင်း
+    if target_user:
+        u_id = target_user.id
+        u_first = target_user.first_name if hasattr(target_user, 'first_name') and target_user.first_name else "User"
+        u_name = f"@{target_user.username}" if hasattr(target_user, 'username') and target_user.username else "No Username (မရှိပါ)"
+    else:
+        u_id = event.sender_id
+        u_first = "User"
+        u_name = "No Username (မရှိပါ)"
+
+    # Private Chat (DM) ထဲမှာ စစ်ဆေးခြင်း
+    if event.is_private:
+        id_card = (
+            "🪪 USER PROFILE CARD\n" 
+            f"👤 Name: {u_first}\n"
+            f"🆔 User ID: {u_id}\n"
+            f"🌐 Username: {u_name}\n"
+            "📣 For support - @Rashxdl"
+        )
+        await event.reply(id_card)
+        return
+
+    # Group ထဲမှာ စစ်ဆေးခြင်း (Group ရဲ့ Info ပါ တစ်ခါတည်းပြပေးမည်)
+    if event.is_group:
+        chat_title = event.chat.title if hasattr(event.chat, 'title') else "Unknown Group"
+        group_id = event.chat_id
+        
+        try:
+            chat_entity = await event.get_input_chat()
+            full_chat = await bot(functions.channels.GetFullChannelRequest(channel=chat_entity))
+            member_count = full_chat.full_chat.participants_count
+        except Exception:
+            member_count = "N/A"
+
+        id_card = (
+            "📊 CHAT & USER INFO CARD\n"
+            f"🏙️ Group Name: {chat_title}\n"
+            f"🆔 Group ID: {group_id}\n"
+            f"👥 Total Members: {member_count}\n"
+            f"👤 Target User: {u_first}\n"
+            f"🆔 User ID: {u_id}\n"
+            f"🌐 Username: {u_name}\n"
+            "📣 For support - @Rashxdl"
+        )
+        await event.reply(id_card)
+        
+# =========================================================================
+# ⚙️ UPDATED: UNIVERSAL FORWARD BROADCAST BY /SEND COMMAND (Official Bot Only)
+# =========================================================================
+@bot.on(events.NewMessage(chats=[OWNER_ID, SPECIFIC_GROUP], pattern=r'(?i)^/send$'))
+async def universal_broadcast_handler(event):
+    """ Text, Stk, Gif, Video, Photo, Voice မရွေး Group တိုင်းဆီသို့ မူရင်းအတိုင်း Forward လှမ်းလုပ်မည့် စနစ် """
+    if event.sender_id != OWNER_ID:
+        return
+
+    if not event.is_reply:
+        await event.reply("❌ **အသုံးပြုပုံ:** Forward လုပ်ချင်သော Message ကို Reply ထောက်ပြီး `/send` ဟု ရိုက်ပေးပါ။")
+        return
+
+    status_msg = await event.reply("🔄 **Universal Group Forwarding စတင်နေပါပြီ...**")
+
+    # DB ထဲရှိ သိုလှောင်ထားသော Group အားလုံးကို ဆွဲထုတ်ခြင်း
+    cursor = tomgaygp_col.find({})
+    groups = await cursor.to_list(length=1000)
+
+    if not groups:
+        await status_msg.edit("❌ **Database ထဲမှာ မှတ်သားထားတဲ့ Group တစ်ခုမှ မရှိသေးပါခင်ဗျာ။**")
+        return
+
+    success_count = 0
+    fail_count = 0
+
+    for gp in groups:
+        target_chat_id = gp.get("chat_id")
+        try:
+            # 💡 bot.forward_messages ကို အသုံးပြုပြီး မူရင်းစာကို အစစ်အမှန် Forward လုပ်ပေးခြင်း
+            await bot.forward_messages(target_chat_id, event.reply_to_msg_id, event.chat_id)
+            success_count += 1
+            # Flood Wait ကာကွယ်ရန် Safe Delay ထည့်သွင်းထားသည်
+            await asyncio.sleep(random.uniform(3.0, 5.0))
+
+        except errors.rpcerrorlist.FloodWaitError as e:
+            print(f"⚠️ FloodWait မိသွားသဖြင့် {e.seconds} စက္ကန့် စောင့်ဆိုင်းနေရသည်။")
+            await asyncio.sleep(e.seconds)
+            try:
+                await bot.forward_messages(target_chat_id, event.reply_to_msg_id, event.chat_id)
+                success_count += 1
+            except Exception:
+                fail_count += 1
+        except Exception as e:
+            print(f"❌ Error forwarding to {target_chat_id}: {e}")
+            fail_count += 1
+            continue
+
+    report_text = (
+        f"📊 **Universal Forward Done, Chief!**\n\n"
+        f"✅ အောင်မြင်သော Group အရေအတွက်: `{success_count}`\n"
+        f"❌ ပို့မရ/စာဖျက်ခံရသော Group: `{fail_count}`\n"
+        f"📈 စုစုပေါင်း botရှိသည့် Group အရေအတွက်: `{len(groups)}` ခု"
+    )
+    await status_msg.edit(report_text)
+    
 # ==========================================
 # 🤖 OFFICIAL BOT COMMAND HANDLERS
 # ==========================================
