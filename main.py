@@ -664,6 +664,7 @@ async def myinfo_handler(event):
     balance = await get_balance(target_user_id)
     total_cp = await get_user_total_cp(target_user_id)
     rank_tier = get_collection_title(total_cp)
+    await slot_col.update_one({"user_id": target_user_id}, {"$set": {"points": total_cp}}, upsert=True)
     
     inv_doc = await inventory_col.find_one({"user_id": target_user_id})
     inv_text = ""
@@ -867,6 +868,7 @@ async def global_callback_handler(event):
             new_balance = balance - price
             await set_balance(user_id, new_balance)
             await inventory_col.update_one({"user_id": user_id}, {"$inc": {f"items.{item_id}": 1}}, upsert=True)
+            await slot_col.update_one({"user_id": user_id}, {"$inc": {"points": item.get("cp", 0)}}, upsert=True)
             
             success_text = (
                 f"✅ **Successfully purchased!**\n\n"
