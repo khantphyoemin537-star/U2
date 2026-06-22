@@ -12,7 +12,7 @@ from deep_translator import GoogleTranslator  # 👈 ဘာသာပြန်စ
 # ==========================================
 # ⚙️ CONFIGURATION (Credentials)
 # ==========================================
-MONGO_URI = "mongodb+srv://khantphyoemin537_db_user:9VRKiaeZkz7rJdpz@cluster0.w6tgi8j.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
+MONGO_URI = "mongodb+srv://kkt:h1BdaMt7nxW9jTXa@cluster0.kb5fzfl.mongodb.net/?appName=Cluster0&tlsAllowInvalidCertificates=true"
 APP_ID = 39584681
 APP_HASH = 'c8c0685d6dd5b9e546093ea90d27733b'
 BOT_TOKEN = '8616292394:AAEwH3GPZQRNNck9Er6WK_ksl57n1P0OVHo'
@@ -40,6 +40,9 @@ tomboy_col = db["tomboy_col"]
 reply_save_col = db["reply_save_col"]  
 slot_col = db["slot_col"]              # Slot Game ရဲ့ Wallet Balance များကို သိမ်းဆည်းမည့်နေရာ
 tomgaygp_col = db["tomgaygp_col"] 
+shop_items_col = db["shop_items_col"]  # 🛒 ဆိုင်ခန်းထဲရှိ Item စာရင်းသိုလှောင်ရန်
+inventory_col = db["inventory_col"]    # 🎒 User များပိုင်ဆိုင်သည့် ပစ္စည်းများသိမ်းရန်
+
 # 💡 Python 3.10+ နှင့် Render အတွက် Event Loop ကြိုတင်တည်ဆောက်ခြင်း
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -52,7 +55,7 @@ userbot = None
 # 💾 ASYNC MONGODB SLOT WALLET DATABASE HELPERS
 # ==========================================
 async def get_balance(user_id):
-    """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB မှ ဆွဲထုတ်ရန် (မရှိပါက ၁ သောင်း အလကားပေးမည်) """
+    """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB မှ ဆွဲထုတ်ရန် """
     doc = await slot_col.find_one({"user_id": user_id})
     if not doc:
         await slot_col.insert_one({"user_id": user_id, "balance": 0})
@@ -62,6 +65,36 @@ async def get_balance(user_id):
 async def set_balance(user_id, amount):
     """ အသုံးပြုသူ၏ လက်ကျန်ငွေအား DB တွင် အသစ်ပြင်ဆင်သိမ်းဆည်းရန် """
     await slot_col.update_one({"user_id": user_id}, {"$set": {"balance": amount}}, upsert=True)
+
+# ==========================================
+# 📊 COLLECTION POINT & RANK SYSTEM (MLBB STYLE)
+# ==========================================
+def get_collection_title(cp):
+    """ Collection Point အလိုက် MLBB ကဲ့သို့ အဆင့်သတ်မှတ်ချက်ပေးရန် """
+    if cp >= 100000: return "World collector 🌍"
+    if cp >= 80000: return "Honour 🎖️"
+    if cp >= 50000: return "Mythic 🌟"
+    if cp >= 30000: return "Legend 🏆"
+    if cp >= 10000: return "Epic 💎"
+    if cp >= 5000: return "Grandmaster 👑"
+    if cp >= 3000: return "Master ⚔️"
+    if cp >= 1000: return "Elite 🛡️"
+    if cp >= 500: return "Beginner 🔰"
+    return "Newbie 👶"
+
+async def get_user_total_cp(user_id):
+    """ အသုံးပြုသူတစ်ဦးချင်းစီ ပိုင်ဆိုင်ထားသော Item စုစုပေါင်းမှ CP ကို တွက်ချက်ရန် """
+    inv = await inventory_col.find_one({"user_id": user_id})
+    if not inv or "items" not in inv:
+        return 0
+    
+    total_cp = 0
+    for item_id, qty in inv["items"].items():
+        if qty > 0:
+            item = await shop_items_col.find_one({"item_id": int(item_id)})
+            if item:
+                total_cp += item.get("cp", 0) * qty
+    return total_cp
 
 # ==========================================
 # 🌍 DUMMY HTTP SERVER FOR RENDER HEALTH CHECK
@@ -156,20 +189,16 @@ async def hint_solver_handler(event):
 
 async def catch_success_forwarder_handler(event):
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        # 1. Spawn Bot ရဲ့ စာထဲမှာ trigger စာသား ပါမပါ အရင်စစ်မယ်
         if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text:
             try:
-                # 2. လက်ရှိ Userbot ရဲ့ Profile အချက်အလက်ကို Dynamic ဆွဲထုတ်မယ် (နာမည်ပြောင်းလည်း အလုပ်လုပ်အောင်လို့ပါ)
                 me = await event.client.get_me()
                 first_name = me.first_name.lower() if me.first_name else ""
                 last_name = me.last_name.lower() if me.last_name else ""
                 full_name = f"{first_name} {last_name}".strip()
                 username = me.username.lower() if me.username else ""
                 
-                # စာလုံး အကြီး/အသေး မရွေး မိစေရန် lower() ပြောင်းစစ်မယ်
                 text_lower = event.text.lower()
                 
-                # 3. First Name, Full Name သို့မဟုတ် Username တစ်ခုခု စာထဲမှာ ပါဝင်နေသလား စစ်ဆေးခြင်း
                 is_own_card = False
                 if first_name and first_name in text_lower:
                     is_own_card = True
@@ -177,10 +206,9 @@ async def catch_success_forwarder_handler(event):
                     is_own_card = True
                 elif username and username in text_lower:
                     is_own_card = True
-                elif event.message.mentioned: # Backup အနေနဲ့ Bot က Tag ခေါ်ရင်လည်း အလုပ်လုပ်မယ်
+                elif event.message.mentioned:
                     is_own_card = True
                     
-                # မိမိကတ် ဟုတ်တယ်ဆိုရင် Specific Group ထဲ Forward လှမ်းပို့မယ်
                 if is_own_card:
                     await event.message.forward_to(SPECIFIC_GROUP)
                     print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
@@ -277,34 +305,588 @@ def calc_keyboard(user_id):
         [Button.inline("1", f"1_{user_id}"), Button.inline("2", f"2_{user_id}"), Button.inline("3", f"3_{user_id}"), Button.inline("-", f"-_{user_id}")],
         [Button.inline("0", f"0_{user_id}"), Button.inline(".", f"._{user_id}"), Button.inline("=", f"=_{user_id}"), Button.inline("+", f"+_{user_id}")]
     ]
+# ========================================================
+# 📊 SYSTEM 4.2: ADVANCED LEADERBOARD (BALANCE & POINTS)
+# ========================================================
+async def fetch_leaderboard(client, event, mode):
+    """ Database မှ Balance သို့မဟုတ် Points အလိုက် Top 10 ကို ဆွဲထုတ်ပေးသည့် Helper Function """
+    field = "balance" if mode == "balance" else "points" # <- Database ထဲက field နာမည်များ
+    title = "🏆 **TOP 10 RICHEST USERS (LEADERBOARD)** 🏆" if mode == "balance" else "⭐ **TOP 10 HIGHEST POINTS (LEADERBOARD)** ⭐"
+    unit = "MMK" if mode == "balance" else "Points"
+    
+    # ကြီးစဉ်ငယ်လိုက် လူ ၁၀ ဦး ဆွဲထုတ်ခြင်း
+    cursor = slot_col.find().sort(field, -1).limit(10)
+    top_list = await cursor.to_list(length=10)
+    
+    if not top_list:
+        return "❌ **Leaderboard မှာ ပြသစရာ လူစာရင်း မရှိသေးပါခင်ဗျာ။**"
+        
+    leaderboard_text = f"{title}\n\n"
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    
+    for index, doc in enumerate(top_list):
+        user_id = doc.get("user_id")
+        val = doc.get(field, 0)
+        medal = medals[index] if index < len(medals) else "🔹"
+        
+        try:
+            user_entity = await client.get_entity(user_id)
+            first_name = user_entity.first_name if user_entity.first_name else "User"
+            first_name = first_name.replace("[", "").replace("]", "").replace("`", "")
+            user_mention = f"[{first_name}](tg://user?id={user_id})"
+        except Exception:
+            user_mention = f"အသုံးပြုသူ (`{user_id}`)"
+            
+        leaderboard_text += f"{medal} {user_mention} — `{val:,}` {unit}\n"
+        
+    leaderboard_text += "\n📣 For support - @Rashxdl"
+    return leaderboard_text
 
-@bot.on(events.NewMessage(pattern=r'(?i)^/calc'))
-async def start_calc(event):
+def leaderboard_buttons():
+    """ အောက်ကပြမည့် Inline Button များ """
+    return [
+        [
+            Button.inline("💰 Balance Top", "top_balance"),
+            Button.inline("⭐ Points Top", "top_points")
+        ]
+    ]
+
+# ၁။ /top Text Command ကို ဖတ်မည့်အပိုင်း (Default အနေဖြင့် Balance ကို အရင်ပြမည်)
+@bot.on(events.NewMessage(pattern=r'(?i)^[./]top(?:@\w+)?$'))
+async def leaderboard_handler(event):
+    status_msg = await event.reply("📊 **Leaderboard ဆွဲထုတ်နေပါသည်... ခေတ္တစောင့်ဆိုင်းပေးပါ။**")
+    text = await fetch_leaderboard(event.client, event, "balance")
+    await status_msg.edit(text, buttons=leaderboard_buttons())
+
+# ၂။ Inline Button နှိပ်လိုက်လျှင် ပြောင်းလဲပေးမည့် Callback အပိုင်း
+@bot.on(events.CallbackQuery(pattern=r'^top_'))
+async def leaderboard_callback_handler(event):
+    data = event.data.decode('utf-8')
+    mode = "balance" if data == "top_balance" else "points"
+    
+    await event.answer() # Button loading စက်ဝိုင်းလေးကို ပိတ်ခြင်း
+    
+    text = await fetch_leaderboard(event.client, event, mode)
+    
+    msg = await event.get_message()
+    if msg.text != text:
+        try:
+            await event.edit(text, buttons=leaderboard_buttons())
+        except Exception:
+            pass
+            
+    # ✨ အရေးကြီးဆုံးအချက်: အခြား Calculator Callback တွေဆီ စီးဆင်းမသွားအောင် ဖြတ်တောက်လိုက်ခြင်း
+    raise events.StopPropagation
+
+# ========================================================
+# ⚡ SYSTEM 3: ENGLISH TRANSLATION ENGINE (/tr)
+# ========================================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/tr(.*)'))
+async def translate_to_english(event):
+    text_to_translate = event.pattern_match.group(1).strip()
+    
+    if not text_to_translate and event.is_reply:
+        reply_msg = await event.get_reply_message()
+        if reply_msg and reply_msg.text:
+            text_to_translate = reply_msg.text
+
+    if not text_to_translate:
+        await event.reply(
+            "❌ **အသုံးပြုပုံ:**\n"
+            "1. `/tr မင်္ဂလာပါ` (စာတိုက်ရိုက်ရိုက်ပြီး ပြန်ခြင်း)\n"
+            "2. တခြားသူစာကို Reply ပြန်ပြီး `/tr` ဟု ရိုက်ခြင်း"
+        )
+        return
+
+    try:
+        translated_text = GoogleTranslator(source='auto', target='en').translate(text_to_translate)
+        reply_text = (
+            f"🔤 **Translated to English:**\n\n"
+            f"`{translated_text}`\n\n"
+            f"📣 For support - @Rashxdl"
+        )
+        await event.reply(reply_text)
+    except Exception as e:
+        logging.error(f"Translation Error: {e}")
+        await event.reply("⚠️ ဘာသာပြန်ရတာ အဆင်မပြေဖြစ်သွားပါတယ်။ ခဏနေမှ ပြန်ကြိုးစားကြည့်ပါ။")
+
+# ==========================================
+# 🎰 SYSTEM 4: TELETHON PORTED SLOT GAME
+# ==========================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/balance'))
+async def balance_handler(event):
     user_id = event.sender_id
+    bal = await get_balance(user_id)
+    await event.reply(f"💰 **Balance:** {bal:,} MMK")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/slot(?:\s+(\d+))?'))
+async def slot_handler(event):
+    args = event.pattern_match.group(1)
+    if not args:
+        await event.reply("🎰 **Usage:** `/slot <amount>`")
+        return
+        
+    try:
+        bet = int(args.strip())
+    except ValueError:
+        await event.reply("❌ **Invalid amount.**")
+        return
+
+    user_id = event.sender_id
+    balance = await get_balance(user_id)
+
+    if bet <= 0:
+        return
+
+    if balance < bet:
+        await event.reply("❌ **Not enough balance.**")
+        return
+
+    balance -= bet
+    await set_balance(user_id, balance)
+
+    status_msg = await event.reply("🎰 **[ 🔄 | 🔄 | 🔄 ]**\n\n*Reels are spinning...* 🎰")
+    
+    for _ in range(3):
+        await asyncio.sleep(0.5)
+        fake_reels = [random.choice(SYMBOLS) for _ in range(3)]
+        try:
+            await status_msg.edit(f"🎰 **[ {' | '.join(fake_reels)} ]**\n\n*Spinning...* 🔄")
+        except Exception:
+            pass
+
+    reels = [random.choice(SYMBOLS) for _ in range(3)]
+    payout = 0
+
+    if reels == ["7️⃣", "7️⃣", "7️⃣"]:
+        payout = bet * 5
+    elif reels[0] == reels[1] == reels[2]:
+        payout = bet * 2
+    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
+        payout = bet * 1.5
+
+    balance += payout
+    await set_balance(user_id, balance)
+
+    win_status = f"🎉 **Win:** +{payout:,} MMK" if payout > 0 else "😭 **You Lost!**"
+    
+    try:
+        await status_msg.edit(
+            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
+            f"💵 **Bet:** {bet:,} MMK\n"
+            f"{win_status}\n"
+            f"💰 **Balance:** {balance:,} MMK"
+        )
+    except Exception:
+        await event.reply(
+            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
+            f"💵 **Bet:** {bet:,} MMK\n"
+            f"{win_status}\n"
+            f"💰 **Balance:** {balance:,} MMK"
+        )
+# ========================================================
+# 🎁 SYSTEM 4.1: DAILY REWARD (24 HOURS COOLDOWN)
+# ========================================================
+@bot.on(events.NewMessage(pattern=r'(?i)^[./]daily(?:@\w+)?$'))
+async def daily_reward_handler(event):
+    user_id = event.sender_id
+    current_time = time.time()
+    
+    # Database မှ အသုံးပြုသူ၏ လက်ရှိ Balance နှင့် နောက်ဆုံး Daily ယူခဲ့သည့် အချိန်ကို ဆွဲထုတ်ခြင်း
+    doc = await slot_col.find_one({"user_id": user_id})
+    
+    last_daily = doc.get("last_daily", 0) if doc else 0
+    balance = doc.get("balance", 0) if doc else 0
+    
+    # ၂၄ နာရီ စက္ကန့် တွက်ချက်ခြင်း (24 * 3600 = 86400 စက္ကန့်)
+    cooldown = 86400
+    elapsed_time = current_time - last_daily
+    
+    if elapsed_time < cooldown:
+        # ကျန်ရှိသည့် အချိန်ကို နာရီ၊ မိနစ်၊ စက္ကန့် ပုံစံပြောင်းခြင်း
+        remaining_time = cooldown - elapsed_time
+        hours = int(remaining_time // 3600)
+        minutes = int((remaining_time % 3600) // 60)
+        seconds = int(remaining_time % 60)
+        
+        await event.reply(
+            f"❌ **Daily Reward ကို ရယူပြီးသား ဖြစ်နေပါတယ်!**\n\n"
+            f"⏳ နောက်တစ်ကြိမ် ထပ်မံရယူနိုင်ရန် စောင့်ဆိုင်းရန်အချိန် -\n"
+            f"👉 `{hours:02d} နာရီ {minutes:02d} မိနစ် {seconds:02d} စက္ကန့်` ကျန်ပါသေးသည်။"
+        )
+        return
+
+    # ၂၄ နာရီ ပြည့်ပြီဆိုပါက ငွေ ၅၀,၀၀၀ ထည့်ပေးပြီး အချိန်ကို Update လုပ်မည်
+    new_balance = balance + 50000
+    await slot_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"balance": new_balance, "last_daily": current_time}},
+        upsert=True
+    )
+    
+    await event.reply(
+        f"🎉 **Daily Reward အောင်မြင်စွာ ရယူပြီးပါပြီ!**\n\n"
+        f"🎁 ယနေ့အတွက် ဆုကြေး: `50,000` MMK\n"
+        f"💰 သင့်ရဲ့ လက်ရှိ စုစုပေါင်းကျန်ငွေ: `{new_balance:,}` MMK"
+    )
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/deposit(?:\s+(\d+)\s+(\d+))?'))
+async def deposit_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1) or not match.group(2):
+        await event.reply("⚠️ **Usage:** `/deposit <user_id> <amount>`")
+        return
+    target_user_id = int(match.group(1))
+    amount = int(match.group(2))
+    
+    balance = await get_balance(target_user_id)
+    await set_balance(target_user_id, balance + amount)
+    await event.reply(f"✅ **Added {amount:,} MMK to {target_user_id}**")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/withdraw(?:\s+(\d+)\s+(\d+))?'))
+async def withdraw_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1) or not match.group(2):
+        await event.reply("⚠️ **Usage:** `/withdraw <user_id> <amount>`")
+        return
+    target_user_id = int(match.group(1))
+    amount = int(match.group(2))
+    
+    balance = await get_balance(target_user_id)
+    if balance < amount:
+        await event.reply("❌ **Insufficient balance.**")
+        return
+        
+    await set_balance(target_user_id, balance - amount)
+    await event.reply(f"✅ **Removed {amount:,} MMK from {target_user_id}**")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/bless(?:\s+(\d+))?'))
+async def bless_handler(event):
+    if event.sender_id != OWNER_ID:
+        return
+    match = event.pattern_match
+    if not match.group(1):
+        await event.reply("🔮 **Usage:** `/bless <amount>`")
+        return
+    amount = int(match.group(1))
+    
+    balance = await get_balance(OWNER_ID)
+    await set_balance(OWNER_ID, balance + amount)
+    await event.reply(f"✨ **Blessing Received!** Added {amount:,} MMK to your own wallet. 🔮")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/start$'))
+async def general_start_handler(event):
+    if event.chat_id == SPECIFIC_GROUP and event.sender_id == OWNER_ID:
+        return  
+        
+    user_id = event.sender_id
+    await get_balance(user_id)  
     user = await event.get_sender()
     first_name = user.first_name if user else "User"
     
-    text = (
-        f"📱 **INTERACTIVE CALCULATOR**\n"
-        f"👤 **Owner:** [{first_name}](tg://user?id={user_id})\n"
-    )
-    if event.is_private:
-        text += f"💼 For business - @Rashxdl\n💡 Use \" + - * / \"\n"
-        
-    text += (
-        f"🔢 **Expression:** `0`\n\n"
-        f"📣 For support - @Rashxdl"
-    )
-    await event.respond(text, buttons=calc_keyboard(user_id))
+    welcome_text = (
+       f"🎰 **Welcome {first_name}!**\n\n"
+       f"Here are the features available in this bot:\n\n"
+       f"🛒 **Shop System:** Type `/shop` to view and purchase collection items!\n"
+       f"🎒 **My Info:** Type `/myinfo` to view your balance, collection points, and rank tier.\n"
+       f"🔢 **Calculator:** Type `/calc` to use the interactive panel.\n"
+       f"🔤 **Translator:** Use `/tr <text>` to translate to English.\n"
+       f"🎰 **Slot Game:** `/slot <amount>` to play."
+    )  
+    await event.reply(welcome_text)
 
-@bot.on(events.CallbackQuery)
-async def handle_calc(event):
-    data = event.data.decode('utf-8')
-    msg = await event.get_message()
+# ==========================================
+# 🛒 SHOP, INVENTORY, GIFT & ADMIN SYSTEMS
+# ==========================================
+
+def get_page_keyboard(items, page):
+    """ Shop ရဲ့ စာမျက်နှာအလိုက် Inline Buttons ပုံစံတည်ဆောက်ရန် """
+    buttons = []
+    # Item များကို ၂ ခုတစ်တွဲ တန်းစီမည်
+    row = []
+    for idx, item in enumerate(items):
+        item_id = item["item_id"]
+        name = item["name"]
+        row.append(Button.inline(f"{item_id}. {name}", f"shop_view_{item_id}_{page}"))
+        if len(row) == 2 or idx == len(items) - 1:
+            buttons.append(row)
+            row = []
+            
+    # Navigation Buttons (Prev / Next)
+    prev_page = 10 if page == 1 else page - 1
+    next_page = 1 if page == 10 else page + 1
     
+    nav_row = [
+        Button.inline("◀️ Prev", f"shop_page_{prev_page}"),
+        Button.inline(f"{page}/10", "shop_stay"),
+        Button.inline("▶️ Next", f"shop_page_{next_page}")
+    ]
+    buttons.append(nav_row)
+    return buttons
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/shop$'))
+async def shop_command_handler(event):
+    """ /shop command ဖြင့် ပစ္စည်းအရောင်းဆိုင် ဖွင့်လှစ်ပေးခြင်း """
+    page = 1
+    # Page 1 အတွက် Item စာရင်းအား DB မှ ဆွဲထုတ်ခြင်း (8 items per page)
+    cursor = shop_items_col.find({"item_id": {"$gte": 1, "$lte": 8}}).sort("item_id", 1)
+    items = await cursor.to_list(length=8)
+    
+    text = "🛒 **What do you want to buy?**\n\n"
+    for item in items:
+        text += f"{item['item_id']}. {item['name']}\n"
+        
+    await event.reply(text, buttons=get_page_keyboard(items, page))
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/myinfo$'))
+async def myinfo_handler(event):
+    """ အသုံးပြုသူ၏ လက်ကျန်ငွေ၊ Collection Points၊ Rank နှင့် ပစ္စည်းစာရင်းပြသခြင်း """
+    # Owner က တခြားသူကို စစ်ဆေးခြင်း ရှိမရှိ စစ်ဆေးရန်
+    target_user_id = event.sender_id
+    user_label = "Your"
+    
+    if event.sender_id == OWNER_ID:
+        if event.is_reply:
+            rep = await event.get_reply_message()
+            target_user_id = rep.sender_id
+            user_label = "Target User"
+        elif len(event.text.split()) > 1:
+            try:
+                target_user_id = int(event.text.split()[1])
+                user_label = f"User ({target_user_id})"
+            except ValueError:
+                pass
+
+    balance = await get_balance(target_user_id)
+    total_cp = await get_user_total_cp(target_user_id)
+    rank_tier = get_collection_title(total_cp)
+    
+    inv_doc = await inventory_col.find_one({"user_id": target_user_id})
+    inv_text = ""
+    
+    if inv_doc and "items" in inv_doc:
+        for item_id, qty in sorted(inv_doc["items"].items(), key=lambda x: int(x[0])):
+            if qty > 0:
+                item = await shop_items_col.find_one({"item_id": int(item_id)})
+                if item:
+                    inv_text += f"• {item['name']} (ID: {item_id}) x{qty}\n"
+                    
+    if not inv_text:
+        inv_text = "No items owned yet. 🎒"
+
+    info_msg = (
+        f"🪪 **{user_label.upper()} PROFILE CARD**\n\n"
+        f"💵 **Balance:** {balance:,} MMK\n"
+        f"🔰 **Collection Points:** {total_cp:,}\n"
+        f"🏆 **Collector Rank:** {rank_tier}\n\n"
+        f"🎒 **Owned Items Inventory:**\n{inv_text}"
+    )
+    await event.reply(info_msg)
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/gift\s+(\d+)'))
+async def gift_item_handler(event):
+    """ /gift {item_id} ဖြင့် တခြားသူအား ပစ္စည်းလက်ဆောင်ပေးခြင်း (CP အလိုအလျောက် ပြောင်းလဲမည်) """
+    if not event.is_reply:
+        await event.reply("❌ **အသုံးပြုပုံ:** ပစ္စည်းပေးလိုသူ၏ စာအား Reply ထောက်ပြီး `/gift {item_id}` ဟု ရိုက်ပေးပါ။")
+        return
+        
+    try:
+        item_id = int(event.pattern_match.group(1))
+    except ValueError:
+        await event.reply("❌ **မှားယွင်းသော Item ID ဖြစ်ပါသည်။**")
+        return
+        
+    sender_id = event.sender_id
+    reply_msg = await event.get_reply_message()
+    receiver_id = reply_msg.sender_id
+    
+    if sender_id == receiver_id:
+        await event.reply("❌ ကိုယ့်ပစ္စည်းကိုယ် ပြန်လက်ဆောင်ပေးလို့ မရပါဘူးခင်ဗျာ။")
+        return
+
+    # ပစ္စည်းရှိမရှိ စစ်ဆေးခြင်း
+    item = await shop_items_col.find_one({"item_id": item_id})
+    if not item:
+        await event.reply("❌ ဤ Item ID အား ဆိုင်ခန်းထဲတွင် ရှာမတွေ့ပါ။")
+        return
+
+    sender_inv = await inventory_col.find_one({"user_id": sender_id})
+    if not sender_inv or "items" not in sender_inv or sender_inv["items"].get(str(item_id), 0) <= 0:
+        await event.reply(f"❌ သင့်မှာ {item['name']} မရှိပါသဖြင့် လက်ဆောင်ပေး၍မရပါ။")
+        return
+
+    # ဒေတာဘေ့စ်တွင် ပစ္စည်းလွှဲပြောင်းခြင်း
+    await inventory_col.update_one({"user_id": sender_id}, {"$inc": {f"items.{item_id}": -1}})
+    await inventory_col.update_one({"user_id": receiver_id}, {"$inc": {f"items.{item_id}": 1}}, upsert=True)
+    
+    # တွက်ချက်မှုအသစ်များ ရယူရန်
+    sender_cp = await get_user_total_cp(sender_id)
+    receiver_cp = await get_user_total_cp(receiver_id)
+
+    gift_success_text = (
+        f"🎁 **Successfully Gifted!**\n\n"
+        f"👤 ပေးပို့သူထံမှ {item['name']} x1 ကို လွှဲပြောင်းပေးလိုက်ပါပြီ။\n"
+        f"📉 Your Collection Point is now: {sender_cp:,}\n"
+        f"📈 Receiver Collection Point is now: {receiver_cp:,}"
+    )
+    await event.reply(gift_success_text)
+
+# ==========================================
+# ⚙️ OWNER ADMIN COMMANDS SYSTEM
+# ==========================================
+@bot.on(events.NewMessage(pattern=r'(?i)^/additem\s+(\d+)\s+(.+)\s+(\d+)\s+(\d+)'))
+async def admin_add_item(event):
+    if event.sender_id != OWNER_ID: return
+    m = event.pattern_match
+    item_id, name, price, cp = int(m.group(1)), m.group(2).strip(), int(m.group(3)), int(m.group(4))
+    
+    await shop_items_col.update_one(
+        {"item_id": item_id},
+        {"$set": {"item_id": item_id, "name": name, "price": price, "cp": cp}},
+        upsert=True
+    )
+    await event.reply(f"✅ **Item Added/Updated:** {name} (ID: {item_id}) | Price: {price} | CP: {cp}")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/removeitem\s+(\d+)'))
+async def admin_remove_item(event):
+    if event.sender_id != OWNER_ID: return
+    item_id = int(event.pattern_match.group(1))
+    res = await shop_items_col.delete_one({"item_id": item_id})
+    if res.deleted_count > 0:
+        await event.reply(f"✅ Item ID {item_id} ကို ဆိုင်ခန်းထဲမှ ဖျက်သိမ်းပြီးပါပြီ။")
+    else:
+        await event.reply("❌ ပစ္စည်းရှာမတွေ့ပါ။")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/editprice\s+(\d+)\s+(\d+)'))
+async def admin_edit_price(event):
+    if event.sender_id != OWNER_ID: return
+    item_id, new_price = int(event.pattern_match.group(1)), int(event.pattern_match.group(2))
+    res = await shop_items_col.update_one({"item_id": item_id}, {"$set": {"price": new_price}})
+    if res.modified_count > 0:
+        await event.reply(f"✅ Item ID {item_id} ၏ ဈေးနှုန်းကို {new_price:,} MMK သို့ ပြောင်းလဲပြီးပါပြီ။")
+    else:
+        await event.reply("❌ ပြင်ဆင်၍မရပါ (သို့မဟုတ်) Item ID မရှိပါ။")
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/editrarity\s+(\d+)\s+(\d+)'))
+async def admin_edit_rarity(event):
+    if event.sender_id != OWNER_ID: return
+    item_id, new_cp = int(event.pattern_match.group(1)), int(event.pattern_match.group(2))
+    res = await shop_items_col.update_one({"item_id": item_id}, {"$set": {"cp": new_cp}})
+    if res.modified_count > 0:
+        await event.reply(f"✅ Item ID {item_id} ၏ Collection Point ကို {new_cp} သို့ ပြောင်းလဲပြီးပါပြီ။")
+    else:
+        await event.reply("❌ ပြင်ဆင်၍မရပါ (သို့မဟုတ်) Item ID မရှိပါ။")
+
+
+# ==========================================
+# 🎛️ GLOBAL CALLBACK QUERY ROUTER (CALCULATOR & SHOP INTERACTION)
+# ==========================================
+@bot.on(events.CallbackQuery)
+async def global_callback_handler(event):
+    data = event.data.decode('utf-8')
+    user_id = event.sender_id
+    
+    # ------------------ SHOP SYSTEM CALLBACKS ------------------
+    if data.startswith("shop_"):
+        await event.answer() # အဝိုင်းလည်နေတာ ရပ်ရန်
+        
+        if data == "shop_stay":
+            return
+            
+        # စာမျက်နှာပြောင်းလဲခြင်း (Pagination)
+        if data.startswith("shop_page_"):
+            page = int(data.split("_")[2])
+            start_id = (page - 1) * 8 + 1
+            end_id = page * 8
+            
+            cursor = shop_items_col.find({"item_id": {"$gte": start_id, "$lte": end_id}}).sort("item_id", 1)
+            items = await cursor.to_list(length=8)
+            
+            text = "🛒 **What do you want to buy?**\n\n"
+            for item in items:
+                text += f"{item['item_id']}. {item['name']}\n"
+                
+            await event.edit(text, buttons=get_page_keyboard(items, page))
+            return
+            
+        # ပစ္စည်းတစ်ခုချင်းစီ၏ အသေးစိတ်အချက်အလက်ကို ကြည့်ရှုခြင်း
+        if data.startswith("shop_view_"):
+            parts = data.split("_")
+            item_id = int(parts[2])
+            page = int(parts[3])
+            
+            item = await shop_items_col.find_one({"item_id": item_id})
+            if not item: return
+            
+            balance = await get_balance(user_id)
+            
+            detail_text = (
+                f"📦 **{item['name']}**\n\n"
+                f"💰 **Price :** {item['price']:,} MMK\n"
+                f"🔰 **Collection point :** {item['cp']}\n\n"
+                f"💵 **Your Balance :** {balance:,} MMK\n"
+                f"──────────────\n"
+                f"Do you want to buy this item?"
+            )
+            
+            buttons = [
+                [Button.inline("🛒 Buy Now", f"shop_buy_{item_id}_{page}")],
+                [Button.inline("⬅️ Back", f"shop_page_{page}")]
+            ]
+            await event.edit(detail_text, buttons=buttons)
+            return
+            
+        # ပစ္စည်းဝယ်ယူခြင်းလုပ်ငန်းစဉ်
+        if data.startswith("shop_buy_"):
+            parts = data.split("_")
+            item_id = int(parts[2])
+            page = int(parts[3])
+            
+            item = await shop_items_col.find_one({"item_id": item_id})
+            if not item: return
+            
+            balance = await get_balance(user_id)
+            price = item['price']
+            
+            if balance < price:
+                # ငွေမလုံလောက်ပါက ပြသမည့် စာမျက်နှာ
+                fail_text = (
+                    f"❌ **Insufficient Balance!**\n\n"
+                    f"💰 **Price :** {price:,} MMK\n"
+                    f"💵 **Your Balance :** {balance:,} MMK"
+                )
+                buttons = [[Button.inline("⬅️ Back to Shop", f"shop_page_{page}")]]
+                await event.edit(fail_text, buttons=buttons)
+                return
+                
+            # ငွေနုတ်ပြီး Inventory ထဲထည့်ခြင်း
+            new_balance = balance - price
+            await set_balance(user_id, new_balance)
+            await inventory_col.update_one({"user_id": user_id}, {"$inc": {f"items.{item_id}": 1}}, upsert=True)
+            
+            success_text = (
+                f"✅ **Successfully purchased!**\n\n"
+                f"{item['name']} x1\n"
+                f"-{price:,} MMK\n\n"
+                f"**Remaining Balance :**\n"
+                f"{new_balance:,} MMK"
+            )
+            buttons = [[Button.inline("⬅️ Back to Shop", f"shop_page_{page}")]]
+            await event.edit(success_text, buttons=buttons)
+            return
+
+    # ------------------ CALCULATOR SYSTEM CALLBACKS ------------------
+    msg = await event.get_message()
     if "_" in data:
         action, allowed_user_id = data.split("_", 1)
-        allowed_user_id = int(allowed_user_id)
+        try:
+            allowed_user_id = int(allowed_user_id)
+        except ValueError:
+            return
     else:
         action = data
         allowed_user_id = None
@@ -380,214 +962,46 @@ async def handle_calc(event):
             pass
     await event.answer()
 
-# ========================================================
-# ⚡ SYSTEM 3: ENGLISH TRANSLATION ENGINE (/tr)
-# ========================================================
-@bot.on(events.NewMessage(pattern=r'(?i)^/tr(.*)'))
-async def translate_to_english(event):
-    text_to_translate = event.pattern_match.group(1).strip()
-    
-    if not text_to_translate and event.is_reply:
-        reply_msg = await event.get_reply_message()
-        if reply_msg and reply_msg.text:
-            text_to_translate = reply_msg.text
 
-    if not text_to_translate:
-        await event.reply(
-            "❌ **အသုံးပြုပုံ:**\n"
-            "1. `/tr မင်္ဂလာပါ` (စာတိုက်ရိုက်ရိုက်ပြီး ပြန်ခြင်း)\n"
-            "2. တခြားသူစာကို Reply ပြန်ပြီး `/tr` ဟု ရိုက်ခြင်း"
-        )
-        return
-
-    try:
-        translated_text = GoogleTranslator(source='auto', target='en').translate(text_to_translate)
-        reply_text = (
-            f"🔤 **Translated to English:**\n\n"
-            f"`{translated_text}`\n\n"
-            f"📣 For support - @Rashxdl"
-        )
-        await event.reply(reply_text)
-    except Exception as e:
-        logging.error(f"Translation Error: {e}")
-        await event.reply("⚠️ ဘာသာပြန်ရတာ အဆင်မပြေဖြစ်သွားပါတယ်။ ခဏနေမှ ပြန်ကြိုးစားကြည့်ပါ။")
-
-# ========================================================
-# 🎰 SYSTEM 4: TELETHON PORTED SLOT GAME (WITH ANIMATION)
-# ========================================================
-@bot.on(events.NewMessage(pattern=r'(?i)^/balance'))
-async def balance_handler(event):
+@bot.on(events.NewMessage(pattern=r'(?i)^/calc'))
+async def start_calc(event):
     user_id = event.sender_id
-    bal = await get_balance(user_id)
-    await event.reply(f"💰 **Balance:** {bal:,} MMK")
-
-@bot.on(events.NewMessage(pattern=r'(?i)^/slot(?:\s+(\d+))?'))
-async def slot_handler(event):
-    args = event.pattern_match.group(1)
-    if not args:
-        await event.reply("🎰 **Usage:** `/slot <amount>`")
-        return
-        
-    try:
-        bet = int(args.strip())
-    except ValueError:
-        await event.reply("❌ **Invalid amount.**")
-        return
-
-    user_id = event.sender_id
-    balance = await get_balance(user_id)
-
-    if bet <= 0:
-        return
-
-    if balance < bet:
-        await event.reply("❌ **Not enough balance.**")
-        return
-
-    # 🔒 Exploit Protection: လည်နေတုန်း ထပ်မနှိပ်နိုင်အောင် ငွေကို DB ထဲမှာ ကြိုနှုတ်ထားမည်
-    balance -= bet
-    await set_balance(user_id, balance)
-
-    # 🔄 Initial Spinning Message
-    status_msg = await event.reply("🎰 **[ 🔄 | 🔄 | 🔄 ]**\n\n*Reels are spinning...* 🎰")
-    
-    # 🎬 Spin Animation Loop
-    for _ in range(3):
-        await asyncio.sleep(0.5)
-        fake_reels = [random.choice(SYMBOLS) for _ in range(3)]
-        try:
-            await status_msg.edit(f"🎰 **[ {' | '.join(fake_reels)} ]**\n\n*Spinning...* 🔄")
-        except Exception:
-            pass
-
-    # Real Spin Result Calculation
-    reels = [random.choice(SYMBOLS) for _ in range(3)]
-    payout = 0
-
-    if reels == ["7️⃣", "7️⃣", "7️⃣"]:
-        payout = bet * 5
-    elif reels[0] == reels[1] == reels[2]:
-        payout = bet * 2
-    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-        payout = bet * 1.5
-
-    balance += payout
-    await set_balance(user_id, balance)
-
-    win_status = f"🎉 **Win:** +{payout:,} MMK" if payout > 0 else "😭 **You Lost!**"
-    
-    try:
-        await status_msg.edit(
-            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
-            f"💵 **Bet:** {bet:,} MMK\n"
-            f"{win_status}\n"
-            f"💰 **Balance:** {balance:,} MMK"
-        )
-    except Exception:
-        await event.reply(
-            f"🎰 **[ {' | '.join(reels)} ]**\n\n"
-            f"💵 **Bet:** {bet:,} MMK\n"
-            f"{win_status}\n"
-            f"💰 **Balance:** {balance:,} MMK"
-        )
-
-@bot.on(events.NewMessage(pattern=r'(?i)^/deposit(?:\s+(\d+)\s+(\d+))?'))
-async def deposit_handler(event):
-    if event.sender_id != OWNER_ID:
-        return
-    match = event.pattern_match
-    if not match.group(1) or not match.group(2):
-        await event.reply("⚠️ **Usage:** `/deposit <user_id> <amount>`")
-        return
-    target_user_id = int(match.group(1))
-    amount = int(match.group(2))
-    
-    balance = await get_balance(target_user_id)
-    await set_balance(target_user_id, balance + amount)
-    await event.reply(f"✅ **Added {amount:,} MMK to {target_user_id}**")
-
-@bot.on(events.NewMessage(pattern=r'(?i)^/withdraw(?:\s+(\d+)\s+(\d+))?'))
-async def withdraw_handler(event):
-    if event.sender_id != OWNER_ID:
-        return
-    match = event.pattern_match
-    if not match.group(1) or not match.group(2):
-        await event.reply("⚠️ **Usage:** `/withdraw <user_id> <amount>`")
-        return
-    target_user_id = int(match.group(1))
-    amount = int(match.group(2))
-    
-    balance = await get_balance(target_user_id)
-    if balance < amount:
-        await event.reply("❌ **Insufficient balance.**")
-        return
-        
-    await set_balance(target_user_id, balance - amount)
-    await event.reply(f"✅ **Removed {amount:,} MMK from {target_user_id}**")
-
-# 🔮 OWNER ONLY BLESS COMMAND
-@bot.on(events.NewMessage(pattern=r'(?i)^/bless(?:\s+(\d+))?'))
-async def bless_handler(event):
-    if event.sender_id != OWNER_ID:
-        return
-    match = event.pattern_match
-    if not match.group(1):
-        await event.reply("🔮 **Usage:** `/bless <amount>`")
-        return
-    amount = int(match.group(1))
-    
-    balance = await get_balance(OWNER_ID)
-    await set_balance(OWNER_ID, balance + amount)
-    await event.reply(f"✨ **Blessing Received!** Added {amount:,} MMK to your own wallet. 🔮")
-
-# ⚡ [FIXED] CLEAN & READABLE ENGLISH TEXT FOR /START
-@bot.on(events.NewMessage(pattern=r'(?i)^/start$'))
-async def general_start_handler(event):
-    """ အထွေထွေ အသုံးပြုသူများအတွက် Start Menu လမ်းညွှန် """
-    if event.chat_id == SPECIFIC_GROUP and event.sender_id == OWNER_ID:
-        return  
-        
-    user_id = event.sender_id
-    await get_balance(user_id)  
     user = await event.get_sender()
     first_name = user.first_name if user else "User"
     
-    welcome_text = (
-       f"🎰 **Welcome {first_name}!**\n\n"
-       f"Here are the features available in this bot:\n\n"
-       f"🔢 **Calculator:** Type `/calc` to use the interactive panel, or simply send a math expression (e.g., `5+5+10`) for an instant result.\n"
-       f"🔤 **Translator:** Use `/tr <text>` or reply to any message with `/tr` to translate it into English.\n"
-       f"🎰 **Slot Game:**\n"
-       f"• `/slot <amount>` - Play the slot machine\n"
-       f"• `/balance` - Check your current wallet balance"
-    )  
-    await event.reply(welcome_text)
-# =========================================================================
+    text = (
+        f"📱 **INTERACTIVE CALCULATOR**\n"
+        f"👤 **Owner:** [{first_name}](tg://user?id={user_id})\n"
+    )
+    if event.is_private:
+        text += f"💼 For business - @Rashxdl\n💡 Use \" + - * / \"\n"
+        
+    text += (
+        f"🔢 **Expression:** `0`\n\n"
+        f"📣 For support - @Rashxdl"
+    )
+    await event.respond(text, buttons=calc_keyboard(user_id))
+
+
 @bot.on(events.NewMessage)
 async def group_tracker_and_notifier(event):
-    """ Bot ရှိနေသမျှ Group တိုင်းကို စောင့်ကြည့်မှတ်သားပြီး Owner DM သို့ သတင်းပို့မည့် စနစ် """
     if event.is_private or not event.is_group:
         return
 
     chat_id = event.chat_id
-    
-    # 1. Group အချက်အလက်များကို DB ထဲတွင် ရှိ/မရှိ အရင်စစ်ဆေးမည်
     exists = await tomgaygp_col.find_one({"chat_id": chat_id})
     if not exists:
         try:
-            # Group Detail များကို တိကျစွာ ဆွဲထုတ်ခြင်း
             chat_entity = await event.get_input_chat()
             full_chat = await bot(functions.channels.GetFullChannelRequest(channel=chat_entity))
             
             title = event.chat.title if hasattr(event.chat, 'title') else "Unknown Group"
             member_count = full_chat.full_chat.participants_count if hasattr(full_chat.full_chat, 'participants_count') else "N/A"
             
-            # Bot တွင် Admin Permission ပေးထားခြင်း ရှိမရှိ စစ်ဆေးရန်
             is_admin = "No"
             invite_link = "Not Available"
             if event.chat.admin_rights:
                 is_admin = "Yes"
-                # Admin ဖြစ်ပါက Invite Link ဖန်တီး၍ Dynamic ဆွဲထုတ်မည်
                 if event.chat.admin_rights.invite_users:
                     try:
                         exported_link = await bot(functions.messages.ExportChatInviteRequest(peer=chat_entity))
@@ -595,7 +1009,6 @@ async def group_tracker_and_notifier(event):
                     except Exception:
                         pass
 
-            # 2. Database `tomgaygp_col` ထဲသို့ တန်ဖိုးအသစ် ထည့်သွင်းသိမ်းဆည်းမည်
             await tomgaygp_col.update_one(
                 {"chat_id": chat_id},
                 {
@@ -611,7 +1024,6 @@ async def group_tracker_and_notifier(event):
                 upsert=True
             )
 
-            # 3. Bot Owner ၏ DM သို့ အသေးစိတ် Notification ပေးပို့ခြင်း
             notif_text = (
                 f"📥 **Bot Added to New Group!**\n\n"
                 f"📛 **Group Name:** {title}\n"
@@ -625,35 +1037,25 @@ async def group_tracker_and_notifier(event):
 
         except Exception as e:
             print(f"⚠️ Failed to track group info for {chat_id}: {e}")
-# =========================================================================
-# 🪪 UPDATED: BEAUTIFUL /ID COMMAND HANDLER (NO BOLD TAGS & REPLY/MENTION SUPPORT)
-# =========================================================================
-@bot.on(events.NewMessage(pattern=r'(?i)^/id(?:\\s+([\\w@]+))?'))
+
+@bot.on(events.NewMessage(pattern=r'(?i)^/id(?:\s+([\w@]+))?'))
 async def beautiful_id_handler(event):
-    """ User ID သို့မဟုတ် Group ID ကို Reply / Mention စနစ်ဖြင့် ပုံစံလှလှလေး ပြသပေးမည့် စနစ် """
-    
     target_user = None
     mention_arg = event.pattern_match.group(1)
 
-    # 1. တခြားသူစာကို Reply (စာထောက်) ထားလျှင် ၎င်းလူ၏ အချက်အလက်ကို ယူမည်
     if event.is_reply:
         reply_msg = await event.get_reply_message()
         if reply_msg:
             target_user = await reply_msg.get_sender()
-            
-    # 2. Username ဖြင့် မန်းရှင်းခေါ်ထားလျှင် (ဥပမာ - /id @username)
     elif mention_arg:
         try:
             target_user = await bot.get_entity(mention_arg)
         except Exception:
             await event.reply("ရှာမတွေ့ပါ။ Username မှန်ကန်မှု ရှိမရှိ ပြန်စစ်ဆေးပေးပါ။")
             return
-            
-    # 3. ဘာမှမပါလျှင် ရိုက်နှိပ်လိုက်သော မိမိကိုယ်တိုင်၏ အချက်အလက်ကို ပြမည်
     else:
         target_user = await event.get_sender()
 
-    # User ရဲ့ အချက်အလက်များကို ခွဲထုတ်ခြင်း
     if target_user:
         u_id = target_user.id
         u_first = target_user.first_name if hasattr(target_user, 'first_name') and target_user.first_name else "User"
@@ -663,7 +1065,6 @@ async def beautiful_id_handler(event):
         u_first = "User"
         u_name = "No Username (မရှိပါ)"
 
-    # Private Chat (DM) ထဲမှာ စစ်ဆေးခြင်း
     if event.is_private:
         id_card = (
             "🪪 USER PROFILE CARD\n" 
@@ -675,7 +1076,6 @@ async def beautiful_id_handler(event):
         await event.reply(id_card)
         return
 
-    # Group ထဲမှာ စစ်ဆေးခြင်း (Group ရဲ့ Info ပါ တစ်ခါတည်းပြပေးမည်)
     if event.is_group:
         chat_title = event.chat.title if hasattr(event.chat, 'title') else "Unknown Group"
         group_id = event.chat_id
@@ -699,12 +1099,8 @@ async def beautiful_id_handler(event):
         )
         await event.reply(id_card)
         
-# =========================================================================
-# ⚙️ UPDATED: UNIVERSAL FORWARD BROADCAST BY /SEND COMMAND (Official Bot Only)
-# =========================================================================
 @bot.on(events.NewMessage(chats=[OWNER_ID, SPECIFIC_GROUP], pattern=r'(?i)^/send$'))
 async def universal_broadcast_handler(event):
-    """ Text, Stk, Gif, Video, Photo, Voice မရွေး Group တိုင်းဆီသို့ မူရင်းအတိုင်း Forward လှမ်းလုပ်မည့် စနစ် """
     if event.sender_id != OWNER_ID:
         return
 
@@ -714,7 +1110,6 @@ async def universal_broadcast_handler(event):
 
     status_msg = await event.reply("🔄 **Universal Group Forwarding စတင်နေပါပြီ...**")
 
-    # DB ထဲရှိ သိုလှောင်ထားသော Group အားလုံးကို ဆွဲထုတ်ခြင်း
     cursor = tomgaygp_col.find({})
     groups = await cursor.to_list(length=1000)
 
@@ -728,10 +1123,8 @@ async def universal_broadcast_handler(event):
     for gp in groups:
         target_chat_id = gp.get("chat_id")
         try:
-            # 💡 bot.forward_messages ကို အသုံးပြုပြီး မူရင်းစာကို အစစ်အမှန် Forward လုပ်ပေးခြင်း
             await bot.forward_messages(target_chat_id, event.reply_to_msg_id, event.chat_id)
             success_count += 1
-            # Flood Wait ကာကွယ်ရန် Safe Delay ထည့်သွင်းထားသည်
             await asyncio.sleep(random.uniform(3.0, 5.0))
 
         except errors.rpcerrorlist.FloodWaitError as e:
@@ -755,9 +1148,6 @@ async def universal_broadcast_handler(event):
     )
     await status_msg.edit(report_text)
     
-# ==========================================
-# 🤖 OFFICIAL BOT COMMAND HANDLERS
-# ==========================================
 @bot.on(events.NewMessage(chats=SPECIFIC_GROUP))
 async def handle_bot_commands(event):
     global is_active, userbot, is_catch_stopped
@@ -787,7 +1177,7 @@ async def handle_bot_commands(event):
             {"$set": {"value": session_str}},
             upsert=True
         )
-        await event.reply("✅ String Session ကို `gasses_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
+        await event.reply("✅ String Session ကို `tomboy_col` ထဲမှာ အောင်မြင်စွာ သိမ်းပြီးပါပြီ။ Userbot ချိတ်ဆက်နေသည်...")
         
         try:
             if userbot:
@@ -796,7 +1186,6 @@ async def handle_bot_commands(event):
             await userbot.start()
             await userbot.get_dialogs()
             
-            # Register Handlers (NameError ဖြစ်စေမည့် မရှိသော function အား ဖယ်ရှားထားသည်)
             userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
             userbot.add_event_handler(hint_solver_handler, events.NewMessage())
             userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
@@ -815,12 +1204,67 @@ async def handle_bot_commands(event):
         await event.reply("✅ `/catch` လုပ်ငန်းစဉ်ကို ပြန်လည်စတင်လိုက်ပါပြီ။**")
         return
 
-# ==========================================
-# 🚀 SYSTEM STARTUP LOGIC
-# ==========================================
+async def init_shop_items():
+    """ Bot စတက်ချိန်တွင် Item ၈၀ စလုံးကို ဒေတာဘေ့စ်ထဲသို့ အလိုအလျောက် သွင်းပေးရန် သီးသန့်စနစ် """
+    count = await shop_items_col.count_documents({})
+    if count >= 80:
+        print("📦 Shop items are already initialized in MongoDB.")
+        return
+
+    print("⚙️ Initializing 80 shop items into MongoDB...")
+    
+    # Item အမည်များ စာရင်းတည်ဆောက်ခြင်း
+    names_list = [
+        "Bread", "Cake", "Fish", "Apple", "Avocado", "Banana", "Sandwich", "Potato",
+        "Cat", "Dog", "Rabbit", "Fox", "Wolf", "Tiger", "Panda", "Dragon Egg",
+        "Wooden Shield", "Iron Shield", "Helmet", "Chestplate", "Gloves", "Boots", "Ring", "Necklace",
+        "Wood", "Bamboo", "Leather", "Rope", "Cloth", "Feather", "Bone", "Crystal",
+        "Wheat", "Corn", "Carrot", "Tomato", "Onion", "Pumpkin", "Cabbage", "Chili",
+        "Wooden Sword", "Iron Sword", "Steel Sword", "Bow", "Arrow", "Dagger", "Spear", "Axe",
+        "Salmon", "Tuna", "Octopus", "Squid", "Oyster", "Pearl", "Seaweed", "Coral",
+        "T-Shirt", "Hoodie", "Jacket", "Gloves", "Hat", "Scarf", "Sneakers", "Backpack",
+        "Magic Crystal", "Fire Crystal", "Water Crystal", "Wind Crystal", "Earth Crystal", "Magic Orb", "Spell Book", "Enchanted Gem",
+        "Diamond", "Pink diamond", "Star opal", "Dragon diamond", "Diamond ring", "Academy Gold", "Crude oil", "Infinity Diamonds"
+    ]
+    
+    # ဈေးနှုန်းနှင့် CP စည်းမျဉ်းများ သတ်မှတ်ခြင်း
+    for idx, name in enumerate(names_list):
+        item_id = idx + 1
+        
+        if 1 <= item_id <= 8:
+            price, cp = 60000, 50
+        elif 9 <= item_id <= 16:
+            price, cp = 90000, 100
+        elif 17 <= item_id <= 24:
+            price, cp = 130000, 200
+        elif 25 <= item_id <= 32:
+            price, cp = 150000, 400
+        elif 33 <= item_id <= 40:
+            price, cp = 300000, 500
+        elif 41 <= item_id <= 48:
+            price, cp = 400000, 800
+        elif 49 <= item_id <= 56:
+            price, cp = 900000, 1200
+        elif 57 <= item_id <= 64:
+            price, cp = 1000000, 1800
+        elif 65 <= item_id <= 72:
+            price, cp = 2000000, 2000
+        elif 73 <= item_id <= 80:
+            price, cp = 4000000, 5000
+            
+        await shop_items_col.update_one(
+            {"item_id": item_id},
+            {"$set": {"item_id": item_id, "name": name, "price": price, "cp": cp}},
+            upsert=True
+        )
+    print("✅ 80 Shop items initialization successful!")
+
 async def startup():
     global is_active, userbot
     print("⏳ System starting up and loading configurations from MongoDB...")
+    
+    # Item စာရင်း ၈၀ အား DB ထဲသို့ စတင်ထည့်သွင်းခြင်း
+    await init_shop_items()
     
     asyncio.create_task(start_dummy_web_server())
 
@@ -844,7 +1288,6 @@ async def startup():
             await userbot.start()
             await userbot.get_dialogs()
             
-            # Register Handlers at Startup
             userbot.add_event_handler(spawn_detector_handler, events.NewMessage())
             userbot.add_event_handler(hint_solver_handler, events.NewMessage())
             userbot.add_event_handler(mass_broadcast_handler, events.NewMessage(outgoing=True))
@@ -861,5 +1304,4 @@ async def startup():
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
-    # 💡 Render ၏ Python 3.14 Environment အတွက် Event Loop နှင့် ပတ်ခြင်း
     loop.run_until_complete(startup())
