@@ -187,8 +187,12 @@ async def hint_solver_handler(event):
                 except Exception as e:
                     print(f"❌ Catch Error: {e}")
 
+# 📦 မိမိကိုယ်တိုင် ဖမ်းမိတဲ့ ကတ် Report များကိုသာ Specific Group ထံ Forward ပေးမည့်စနစ်
 async def catch_success_forwarder_handler(event):
+    """ Spawn Bot က ကတ်မိသွားလို့ ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ! ဟု ပို့လာပြီး မိမိကို Mention ခေါ်ထားမှသာ Forward ပေးမည် """
     if event.sender_id == SPAWN_BOT_ID and event.text:
+        
+        # 🎯 စာသားမှန်ကန်ကြောင်း အရင်စစ်ဆေးခြင်း
         if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text:
             try:
                 me = await event.client.get_me()
@@ -199,22 +203,19 @@ async def catch_success_forwarder_handler(event):
                 
                 text_lower = event.text.lower()
                 
-                is_own_card = False
-                if first_name and first_name in text_lower:
-                    is_own_card = True
-                elif full_name and full_name in text_lower:
-                    is_own_card = True
-                elif username and username in text_lower:
-                    is_own_card = True
-                elif event.message.mentioned:
-                    is_own_card = True
-                    
-                if is_own_card:
+                # ⚡ [Best of Both Worlds] မင်းရဲ့ စုံလင်တဲ့ Logic ကို ကျစ်လျစ်စွာ ပေါင်းစပ်ထားခြင်း
+                if (
+                    event.message.mentioned or 
+                    (first_name and first_name in text_lower) or 
+                    (full_name and full_name in text_lower) or 
+                    (username and username in text_lower)
+                ):
                     await event.message.forward_to(SPECIFIC_GROUP)
                     print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
                     
             except Exception as e:
                 print(f"❌ Success Card Forward Error: {e}")
+
 
 # ==========================================
 # 📢 USERBOT MASS BROADCAST SYSTEM
