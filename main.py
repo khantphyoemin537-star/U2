@@ -128,15 +128,19 @@ async def delete_catch_message_delayed(client, chat_id, msg_id):
 # ==========================================
 # ⚔️ NEW ANIME SPAWN DETECTOR & CATCHER HANDLERS
 # ==========================================
+# ⚔️ USERBOT HANDLERS
+# ==========================================
 async def spawn_detector_handler(event):
-    global last_spawn_chat_id, spawn_tracker
+    global last_spawn_chat_id, spawn_tracker, is_catch_stopped 
+    
+    if is_catch_stopped:
+        return
+
     if event.sender_id == SPAWN_BOT_ID and event.text:
         if "ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!" in event.text:
-            
-            if event.chat_id in [-1001947407821, -1003067509601]:
+            if event.chat_id in [-1001947407820, -1003067509608]:
                 return  
-
-            if any(emoji in event.text for emoji in ["🔵", "🟣"]):
+            if any(emoji in event.text for emoji in ["🔵", "🟣" ,"🟡" ,"🟠","💮"]):
                 return  
 
             orig_chat_id = event.chat_id
@@ -151,7 +155,6 @@ async def spawn_detector_handler(event):
                 
                 if len(spawn_tracker) > 100:
                     spawn_tracker.pop(next(iter(spawn_tracker)))
-                    
             except Exception:
                 pass
 
@@ -171,52 +174,29 @@ async def hint_solver_handler(event):
                 target_group = spawn_tracker[event.reply_to_msg_id]
                 
             if target_group:
-                if target_group in [-1001947407821, -1003067509601]:
+                if target_group in [-1001947407820, -1003067509608]:
                     return
                 try:
-                    delay_time = random.uniform(0.3, 0.5) 
-                    
+                    delay_time = random.uniform(0.5, 0.6) 
                     async with event.client.action(target_group, 'typing'):
                         await asyncio.sleep(delay_time)
                         
                     sent_msg = await event.client.send_message(target_group, catch_command)
-                    print(f"🎯 Caught character with delay {delay_time:.2f}s")
-                    
                     asyncio.create_task(delete_catch_message_delayed(event.client, target_group, sent_msg.id))
-                    
-                except Exception as e:
-                    print(f"❌ Catch Error: {e}")
+                except Exception:
+                    pass
 
-# 📦 မိမိကိုယ်တိုင် ဖမ်းမိတဲ့ ကတ် Report များကိုသာ Specific Group ထံ Forward ပေးမည့်စနစ်
 async def catch_success_forwarder_handler(event):
-    """ Spawn Bot က ကတ်မိသွားလို့ ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ! ဟု ပို့လာပြီး မိမိကို Mention ခေါ်ထားမှသာ Forward ပေးမည် """
+    global is_catch_stopped
+    if is_catch_stopped:
+        return
     if event.sender_id == SPAWN_BOT_ID and event.text:
-        
-        # 🎯 စာသားမှန်ကန်ကြောင်း အရင်စစ်ဆေးခြင်း
-        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text:
+        if "ʏᴏᴜ ɢᴏᴛ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!" in event.text and event.message.mentioned:
             try:
-                me = await event.client.get_me()
-                first_name = me.first_name.lower() if me.first_name else ""
-                last_name = me.last_name.lower() if me.last_name else ""
-                full_name = f"{first_name} {last_name}".strip()
-                username = me.username.lower() if me.username else ""
-                
-                text_lower = event.text.lower()
-                
-                # ⚡ [Best of Both Worlds] မင်းရဲ့ စုံလင်တဲ့ Logic ကို ကျစ်လျစ်စွာ ပေါင်းစပ်ထားခြင်း
-                if (
-                    event.message.mentioned or 
-                    (first_name and first_name in text_lower) or 
-                    (full_name and full_name in text_lower) or 
-                    (username and username in text_lower)
-                ):
-                    await event.message.forward_to(SPECIFIC_GROUP)
-                    print("📦 Forwarded YOUR OWN success catch card report to SPECIFIC_GROUP.")
-                    
-            except Exception as e:
-                print(f"❌ Success Card Forward Error: {e}")
-
-
+                await event.message.forward_to(SPECIFIC_GROUP)
+            except Exception:
+                pass
+    
 # ==========================================
 # 📢 USERBOT MASS BROADCAST SYSTEM
 # ==========================================
