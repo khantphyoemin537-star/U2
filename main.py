@@ -31,7 +31,7 @@ SPECIFIC_CONTROL_GROUP = int(os.getenv("SPECIFIC_CONTROL_GROUP", SPECIFIC_GROUP)
 
 STORAGE_CHANNEL = SPECIFIC_CONTROL_GROUP
 TAGLINE = "\n\nAlso try this @Imjustkidding_bot"
-CARDS_PER_PAGE = 5
+CARDS_PER_PAGE = 10
 
 # ==========================================
 # 🌐 Render Port-Binding Fix
