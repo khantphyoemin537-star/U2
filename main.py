@@ -291,20 +291,42 @@ async def catch_handler(event):
         await reply_tag(event, success_text)
 
 # ---- /w ----
-@bot1.on(events.NewMessage(pattern=r'^/w(?:@\w+)?$'))
-async def w_handler(event):
+@bot1.on(events.NewMessage(pattern=r'^(?:/w|/who)(?:@\w+)?$'))
+async def who_reveal_handler(event):
     if event.is_private:
         return
     chat_id = event.chat_id
+    
+    # 1️⃣ Spawn ရှိမရှိ စစ်ဆေးမယ်
     if chat_id not in active_spawns:
-        await reply_tag(event, "❌ No character has spawned.")
+        await reply_tag(event, "❌ No character has spawned in this chat.")
         return
-    data = active_spawns[chat_id]
+        
+    spawn_data = active_spawns[chat_id]
+    
+    # 2️⃣ အချိန်ကုန်သွားပြီလား စစ်ဆေးမယ် (၅ မိနစ်)
+    if time.time() - spawn_data["spawn_time"] > 300:
+        if chat_id in active_spawns:
+            del active_spawns[chat_id]
+        await reply_tag(event, "⏱️ The character has vanished! Try again later.")
+        return
+    
+    # 3️⃣ Reply ထောက်ထားရဲ့လား စစ်ဆေးမယ်
+    if not event.is_reply:
+        await reply_tag(event, "⚠️ Please reply directly to the spawn message to reveal the character name!")
+        return
+    
+    # 4️⃣ Reply ထောက်ထားတဲ့စာက မူရင်း Spawn စာနဲ့ ကိုက်ညီလား စစ်ဆေးမယ်
+    if event.reply_to_msg_id != spawn_data["spawn_msg_id"]:
+        await reply_tag(event, "⚠️ Please reply directly to the spawn message, not to other messages!")
+        return
+    
+    # 5️⃣ အားလုံးပြီးရင် ကဒ်အချက်အလက်တွေကို ပြပေးမယ်
     await reply_tag(event,
-        f"🌟 Name: {data['name']}\n"
-        f"📺 Series: {data['series']}\n"
-        f"💎 Rarity: {RARITY_EMOJI.get(data['rarity'], '')} {data['rarity']}"
-    )
+        f"🌟 Name: {spawn_data['name']}\n"
+        f"📺 Series: {spawn_data['series']}\n"
+        f"💎 Rarity: {RARITY_EMOJI.get(spawn_data['rarity'], '')} {spawn_data['rarity']}"
+                   )
 
 # ---- /hmode (Set Rarity Filter / Sorting Priority) ----
 @bot1.on(events.NewMessage(pattern=r'^/hmode(?:@\w+)?$'))
