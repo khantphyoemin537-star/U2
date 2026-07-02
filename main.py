@@ -9,8 +9,7 @@ from datetime import datetime
 from html import escape as escape_html
 
 from dotenv import load_dotenv
-from telethon import TelegramClient, events, errors, Button, types
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon import TelegramClient, events, errors, Button
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from deep_translator import GoogleTranslator
@@ -75,6 +74,13 @@ def get_rarity_value(rarity_name):
     return 50
 
 # ==========================================
+# Global Variables
+# ==========================================
+bot1 = None
+active_spawns = {}
+spawn_locks = defaultdict(asyncio.Lock)
+
+# ==========================================
 # Helpers
 # ==========================================
 async def reply_tag(event, text, **kwargs):
@@ -109,7 +115,7 @@ async def ensure_user_registered(user_id, fullname):
                 "harem": [],
                 "fullname": fullname,
                 "fav_card": None,
-                "rarity_filter": None,  # For /hmode sorting
+                "rarity_filter": None,
                 "rarity_counts": {t["name"]: 0 for t in RARITY_TIERS},
                 "last_daily": 0,
                 "last_hunt": 0
@@ -129,16 +135,8 @@ async def add_balance(user_id, amount):
     await users_catcher_col.update_one({"user_id": user_id}, {"$inc": {"wallet_balance": amount}}, upsert=True)
 
 # ==========================================
-# Bot Client
-# ==========================================
-bot1 = None 
-
-# ==========================================
 # Character Spawn System
 # ==========================================
-active_spawns = {}
-spawn_locks = defaultdict(asyncio.Lock)
-
 async def spawn_cleaner():
     while True:
         now = time.time()
@@ -153,13 +151,9 @@ async def trigger_dynamic_spawn(chat_id):
     disabled = await spawn_disabled_col.find_one({"chat_id": chat_id})
     if disabled and disabled.get("disabled", False):
         return
-    
-    # Get all characters
     all_chars = await characters_base_col.find().to_list(length=None)
     if not all_chars:
         return
-    
-    # Filter out characters that have reached their spawn limit
     available_chars = []
     for c in all_chars:
         spawn_count = c.get('spawn_count', 0)
@@ -167,31 +161,24 @@ async def trigger_dynamic_spawn(chat_id):
         if spawn_limit > 0 and spawn_count >= spawn_limit:
             continue
         available_chars.append(c)
-    
     if not available_chars:
         return
-    
     weights = []
     for c in available_chars:
         rarity = classify_rarity(c.get("rarity", "Lower"))
         weight = 100 - (RARITY_ORDER.get(rarity, 6) * 10)
         weights.append(max(1, weight))
-    
     chosen = random.choices(available_chars, weights=weights, k=1)[0]
     storage_msg_id = chosen.get("storage_msg_id")
     if not storage_msg_id:
         return
-    
     try:
         stored_msg = await bot1.get_messages(STORAGE_CHANNEL, ids=storage_msg_id)
         if not stored_msg or not stored_msg.media:
             return
     except:
         return
-    
-    # Increment spawn count
     await characters_base_col.update_one({"char_id": chosen["char_id"]}, {"$inc": {"spawn_count": 1}})
-    
     caption = f"🔱 A character has spawned in this chat!\nAdd to harem using /gases [ NAME ]"
     sent_msg = await bot1.send_message(chat_id, file=stored_msg.media, caption=caption)
     active_spawns[chat_id] = {
@@ -204,7 +191,10 @@ async def trigger_dynamic_spawn(chat_id):
         "spawn_msg_id": sent_msg.id
     }
 
-@bot1.on(events.NewMessage(incoming=True))
+# ==========================================
+# HANDLERS (Functions, no decorators)
+# ==========================================
+
 async def message_counter_for_spawn(event):
     if event.is_private or event.chat_id == SPECIFIC_GROUP:
         return
@@ -226,12 +216,7 @@ async def message_counter_for_spawn(event):
         await groups_counters_col.update_one({"chat_id": chat_id}, {"$set": {"counter": 0}})
         await trigger_dynamic_spawn(chat_id)
 
-# ==========================================
-# 📌 COMMAND HANDLERS
-# ==========================================
-
 # ---- /gases (or /catch) ----
-@bot1.on(events.NewMessage(pattern=r'^(?:/gases|/catch)(?:@\w+)?\s+(.+)$'))
 async def catch_handler(event):
     if event.is_private:
         return
@@ -291,66 +276,64 @@ async def catch_handler(event):
         await reply_tag(event, success_text)
 
 # ---- /w ----
-@bot1.on(events.NewMessage(pattern=r'^(?:/w|/waifu)(?:@\w+)?$'))
+async def w_handler(event):
+    if event.is_private:
+        return
+    chat_id = event.chat_id
+    if chat_id not in active_spawns:
+        await reply_tag(event, "❌ No character has spawned.")
+        return
+    data = active_spawns[chat_id]
+    await reply_tag(event,
+        f"🌟 Name: {data['name']}\n"
+        f"📺 Series: {data['series']}\n"
+        f"💎 Rarity: {RARITY_EMOJI.get(data['rarity'], '')} {data['rarity']}"
+    )
+
+# ---- /who (reply required) ----
 async def who_reveal_handler(event):
     if event.is_private:
         return
     chat_id = event.chat_id
-    
-    # 1️⃣ Spawn ရှိမရှိ စစ်ဆေးမယ်
     if chat_id not in active_spawns:
         await reply_tag(event, "❌ No character has spawned in this chat.")
         return
-        
     spawn_data = active_spawns[chat_id]
-    
-    # 2️⃣ အချိန်ကုန်သွားပြီလား စစ်ဆေးမယ် (၅ မိနစ်)
     if time.time() - spawn_data["spawn_time"] > 300:
         if chat_id in active_spawns:
             del active_spawns[chat_id]
         await reply_tag(event, "⏱️ The character has vanished! Try again later.")
         return
-    
-    # 3️⃣ Reply ထောက်ထားရဲ့လား စစ်ဆေးမယ်
     if not event.is_reply:
         await reply_tag(event, "⚠️ Please reply directly to the spawn message to reveal the character name!")
         return
-    
-    # 4️⃣ Reply ထောက်ထားတဲ့စာက မူရင်း Spawn စာနဲ့ ကိုက်ညီလား စစ်ဆေးမယ်
     if event.reply_to_msg_id != spawn_data["spawn_msg_id"]:
         await reply_tag(event, "⚠️ Please reply directly to the spawn message, not to other messages!")
         return
-    
-    # 5️⃣ အားလုံးပြီးရင် ကဒ်အချက်အလက်တွေကို ပြပေးမယ်
     await reply_tag(event,
         f"🌟 Name: {spawn_data['name']}\n"
         f"📺 Series: {spawn_data['series']}\n"
         f"💎 Rarity: {RARITY_EMOJI.get(spawn_data['rarity'], '')} {spawn_data['rarity']}"
-                   )
+    )
 
-# ---- /hmode (Set Rarity Filter / Sorting Priority) ----
-@bot1.on(events.NewMessage(pattern=r'^/hmode(?:@\w+)?$'))
+# ---- /hmode ----
 async def hmode_handler(event):
     user_id = event.sender_id
     doc = await users_catcher_col.find_one({"user_id": user_id})
     current_filter = doc.get("rarity_filter") if doc else None
-    
     buttons = []
     for tier in RARITY_TIERS:
         label = f"✅ {tier['emoji']} {tier['name']}" if current_filter == tier['name'] else f"{tier['emoji']} {tier['name']}"
         buttons.append([Button.inline(label, data=f"hfilter_{tier['name']}_{user_id}")])
-    
     clear_label = "🔓 Clear Filter" if current_filter else "🔒 No Filter"
     buttons.append([Button.inline(clear_label, data=f"hfilter_clear_{user_id}")])
-    
     await reply_tag(
         event,
         f"🎯 Select Rarity to prioritize in /harem\nCurrent: {current_filter if current_filter else 'None (Show All)'}",
         buttons=buttons
     )
 
-# ---- /harem (with Pagination & Sorting) ----
-@bot1.on(events.NewMessage(pattern=r'^/harem(?:@\w+)?$'))
+# ---- /harem ----
 async def harem_handler(event):
     user_id = event.sender_id
     await ensure_user_registered(user_id, "User")
@@ -365,41 +348,31 @@ async def send_harem_page(event, user_id, page=1, edit_msg_id=None, callback_que
         else:
             await reply_tag(event, msg)
         return
-    
     harem_list = doc.get("harem", [])
-    rarity_filter = doc.get("rarity_filter")  # e.g., "Bear"
-    
-    # Sort: If filter is set, put that rarity first, then others
+    rarity_filter = doc.get("rarity_filter")
     if rarity_filter:
         def sort_key(item):
             if item.get("rarity") == rarity_filter:
                 return 0
             return 1
         harem_list = sorted(harem_list, key=sort_key)
-    
     total = len(harem_list)
     total_pages = max(1, (total + CARDS_PER_PAGE - 1) // CARDS_PER_PAGE)
     if page < 1: page = 1
     if page > total_pages: page = total_pages
-    
     start = (page - 1) * CARDS_PER_PAGE
     end = min(start + CARDS_PER_PAGE, total)
     page_items = harem_list[start:end]
-    
-    # Build text
     output = "🎒 Your Harem Collection\n"
     if rarity_filter:
         output += f"⭐ Prioritizing: {rarity_filter}\n"
     output += f"📑 Page {page}/{total_pages} | Total: {total} cards\n\n"
-    
     for idx, card in enumerate(page_items, start=start+1):
         name = card.get("name", "Unknown")
         series = card.get("series", "Unknown")
         rarity = card.get("rarity", "Lower")
         char_id = card.get("char_id", "N/A")
         output += f"{idx}. {RARITY_EMOJI.get(rarity, '')} {name} ({series}) [ID: {char_id}]\n"
-    
-    # Build buttons
     buttons = []
     nav_row = []
     if page > 1:
@@ -408,41 +381,31 @@ async def send_harem_page(event, user_id, page=1, edit_msg_id=None, callback_que
         nav_row.append(Button.inline("Next ➡️", data=f"hpage_{page+1}_{user_id}"))
     if nav_row:
         buttons.append(nav_row)
-    
-    # Add HMODE button for convenience
     buttons.append([Button.inline("🎯 Set Rarity Priority", data=f"goto_hmode_{user_id}")])
-    
     if edit_msg_id:
         await bot1.edit_message(event.chat_id, edit_msg_id, output + TAGLINE, parse_mode='html', buttons=buttons)
     else:
         await event.reply(output + TAGLINE, parse_mode='html', buttons=buttons)
 
-# ---- Inline Query (Harem Gallery with Images/Videos) ----
-@bot1.on(events.InlineQuery)
+# ---- Inline Query ----
 async def harem_inline(event):
     query_text = (event.text or "").strip()
     if not query_text.startswith("harem."):
         return
-    
     try:
         target_user_id = int(query_text.split(".", 1)[1])
     except (ValueError, IndexError):
         return
-    
     if event.sender_id != target_user_id:
         await event.answer([], switch_pm="❌ This is not your vault!", switch_pm_param="start")
         return
-    
     doc = await users_catcher_col.find_one({"user_id": target_user_id})
     if not doc or not doc.get("harem"):
         await event.answer([], switch_pm="📭 Your vault is empty!", switch_pm_param="start")
         return
-    
     harem = doc.get("harem", [])
     results = []
     builder = event.builder
-    
-    # Show up to 50 cards in inline mode
     for card in harem[:50]:
         char_id = card.get("char_id")
         if not char_id:
@@ -450,24 +413,19 @@ async def harem_inline(event):
         char_data = await characters_base_col.find_one({"char_id": char_id})
         if not char_data:
             continue
-        
         storage_id = char_data.get("storage_msg_id")
         if not storage_id:
             continue
-        
         try:
             stored_msg = await bot1.get_messages(STORAGE_CHANNEL, ids=storage_id)
             if not stored_msg or not stored_msg.media:
                 continue
-            
             caption = (
                 f"🌟 {card.get('name', 'Unknown')}\n"
                 f"🆔 {char_id}\n"
                 f"🎭 {card.get('series', 'Unknown')}\n"
                 f"💎 {card.get('rarity', 'Unknown')}"
             )
-            
-            # Determine media type
             if stored_msg.photo:
                 results.append(builder.photo(
                     file=stored_msg.media,
@@ -476,7 +434,6 @@ async def harem_inline(event):
                     parse_mode='html'
                 ))
             elif stored_msg.video:
-                # Send as video
                 results.append(builder.video(
                     file=stored_msg.media,
                     id=char_id,
@@ -484,7 +441,6 @@ async def harem_inline(event):
                     parse_mode='html'
                 ))
             else:
-                # Document or other
                 results.append(builder.document(
                     file=stored_msg.media,
                     title=card.get('name', 'Card'),
@@ -495,11 +451,9 @@ async def harem_inline(event):
         except Exception as e:
             logging.error(f"Inline error for {char_id}: {e}")
             continue
-    
     await event.answer(results, cache_time=0)
 
 # ---- /myinfo ----
-@bot1.on(events.NewMessage(pattern=r'^/myinfo(?:@\w+)?$'))
 async def myinfo_handler(event):
     user_id = event.sender_id
     mention = await get_mention(bot1, user_id)
@@ -538,16 +492,13 @@ async def myinfo_handler(event):
     else:
         await reply_tag(event, text)
 
-# ---- /check (with image) ----
-@bot1.on(events.NewMessage(pattern=r'^/check(?:@\w+)?\s+(\S+)$'))
+# ---- /check ----
 async def check_handler(event):
     char_id = event.pattern_match.group(1).strip()
     char_doc = await characters_base_col.find_one({"char_id": char_id})
     if not char_doc:
         await reply_tag(event, "❌ Character not found.")
         return
-    
-    # 📸 ပုံကို ဆွဲယူမယ်
     media = None
     try:
         stored = await bot1.get_messages(STORAGE_CHANNEL, ids=char_doc.get("storage_msg_id"))
@@ -555,64 +506,35 @@ async def check_handler(event):
             media = stored.media
     except:
         pass
-    
-    # 🏆 ပိုင်ရှင်တွေကို ဆွဲယူမယ်
+    rarity = char_doc.get("rarity", "Unknown")
+    info = (
+        f"🃏 Card Details\n"
+        f"ID: {char_id}\n"
+        f"Name: {char_doc['name']}\n"
+        f"Series: {char_doc['series']}\n"
+        f"Rarity: {rarity}\n"
+        f"Spawn count: {char_doc.get('spawn_count', 0)}\n"
+        f"Max Spawn: {char_doc.get('spawn_limit', 0)}\n"
+        f"Events: {char_doc.get('events', 'None')}"
+    )
     pipeline = [
         {"$match": {"harem.char_id": char_id}},
         {"$project": {"fullname": 1, "count": {"$size": {"$filter": {"input": "$harem", "as": "item", "cond": {"$eq": ["$$item.char_id", char_id]}}}}}},
         {"$sort": {"count": -1}}, {"$limit": 5}
     ]
     owners = await users_catcher_col.aggregate(pipeline).to_list(length=5)
-    
-    # 📝 စာသားကို သန့်သန့်ရှင်းရှင်း ပြင်ဆင်မယ်
-    rarity = char_doc.get("rarity", "Unknown")
-    rarity_emoji = RARITY_EMOJI.get(rarity, "")
-    spawn_count = char_doc.get("spawn_count", 0)
-    spawn_limit = char_doc.get("spawn_limit", 0)
-    
-    # 🃏 Card Details
-    info_lines = [
-        " CARD DETAILS",
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"🆔 ID: {char_id}",
-        f"📛 Name: {char_doc['name']}",
-        f"📺 Series: {char_doc['series']}",
-        f"💎 Rarity: {rarity_emoji} {rarity}",
-        f"📈 Spawn count: {spawn_count}",
-    ]
-    if spawn_limit > 0:
-        info_lines.append(f"🔒 Max Spawn: {spawn_limit}")
-    if char_doc.get('events'):
-        info_lines.append(f"🏷️ Events: {char_doc['events']}")
-    
-    # 🏆 Top Owners (နှိပ်လို့ရအောင် ပြင်ထားတယ်)
     if owners:
-        info_lines.append("")
-        info_lines.append("🏆 TOP OWNERS")
-        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
+        info += "\n\nTop Owners:"
         for i, o in enumerate(owners, 1):
             mention = await get_mention(bot1, o['user_id'], o.get('fullname'))
             count = o['count']
-            info_lines.append(f"{i}. {mention} — x{count}")
-    else:
-        info_lines.append("")
-        info_lines.append("📭 No one owns this card yet.")
-    
-    # 📝 စာသားအားလုံးကို ပေါင်းပြီး ပို့မယ်
-    full_text = "\n".join(info_lines)
-    
-    # 📸 ပုံနဲ့တကွ ပို့မယ်
+            info += f"\n{i}. {mention} — x{count}"
     if media:
-        await bot1.send_file(
-            event.chat_id,
-            media,
-            caption=full_text + TAGLINE,
-            parse_mode='html'
-        )
+        await bot1.send_file(event.chat_id, media, caption=info + TAGLINE, parse_mode='html')
     else:
-        await reply_tag(event, f"<code>{full_text}</code>")
-# ---- /addcharacter (Name | Series | Rarity | ID | Events | SpawnLimit) ----
-@bot1.on(events.NewMessage(pattern=r'^/addcharacter(?:@\w+)?\s+(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)(?:\s*\|\s*(\d+))?$'))
+        await reply_tag(event, info)
+
+# ---- /addcharacter ----
 async def addcharacter_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -626,8 +548,7 @@ async def addcharacter_handler(event):
     rarity_input = parts[2].strip()
     char_id = parts[3].strip()
     events = parts[4].strip()
-    spawn_limit = int(parts[5]) if parts[5] else 0  # 0 = infinite
-    
+    spawn_limit = int(parts[5]) if parts[5] else 0
     if not char_id:
         await reply_tag(event, "❌ ID cannot be empty.")
         return
@@ -667,7 +588,6 @@ async def addcharacter_handler(event):
     await reply_tag(event, f"✅ Character added:\nID: {char_id}\nName: {name}\nSeries: {series}\nRarity: {rarity_name}\nEvents: {events}\nMax Spawn: {spawn_limit if spawn_limit > 0 else 'Infinite'}")
 
 # ---- /removecharacter ----
-@bot1.on(events.NewMessage(pattern=r'^/removecharacter(?:@\w+)?\s+(\S+)$'))
 async def removecharacter_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -677,7 +597,6 @@ async def removecharacter_handler(event):
     await reply_tag(event, f"✅ Character {char_id} removed." if result.deleted_count else "❌ Not found.")
 
 # ---- /fspawn ----
-@bot1.on(events.NewMessage(pattern=r'^/fspawn(?:@\w+)?(?:\s+([-\d]+))?$'))
 async def force_spawn(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -688,7 +607,6 @@ async def force_spawn(event):
     await reply_tag(event, f"✅ Forced spawn in {chat_id}.")
 
 # ---- /spawnoff ----
-@bot1.on(events.NewMessage(pattern=r'^/spawnoff(?:@\w+)?\s+([-\d]+)(?:\s+(on|off))?$'))
 async def spawn_toggle(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -704,7 +622,6 @@ async def spawn_toggle(event):
     await reply_tag(event, f"✅ Spawn for {chat_id} is now {'disabled' if new_state else 'enabled'}.")
 
 # ---- /spawnstats ----
-@bot1.on(events.NewMessage(pattern=r'^/spawnstats(?:@\w+)?(?:\s+([-\d]+))?$'))
 async def spawn_stats(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -720,7 +637,6 @@ async def spawn_stats(event):
     await reply_tag(event, f"📊 Spawn stats for {chat_id}\nCounter: {count}\nTarget: {target}\nRemaining: {max(0, target-count)}\nDisabled: {disabled}")
 
 # ---- /changetime ----
-@bot1.on(events.NewMessage(pattern=r'^/changetime(?:@\w+)?\s+(\d+)(?:\s+(\d+))?$'))
 async def changetime_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -737,7 +653,6 @@ async def changetime_handler(event):
         await reply_tag(event, f"✅ Global spawn target set to {target}.")
 
 # ---- /status ----
-@bot1.on(events.NewMessage(pattern=r'^/status(?:@\w+)?$'))
 async def status_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -759,14 +674,12 @@ async def status_handler(event):
     await reply_tag(event, text)
 
 # ---- /balance ----
-@bot1.on(events.NewMessage(pattern=r'^/balance(?:@\w+)?$'))
 async def balance_handler(event):
     user_id = event.sender_id
     bal = await get_balance(user_id)
     await reply_tag(event, f"💰 Balance: {bal:,} MMK")
 
 # ---- /daily ----
-@bot1.on(events.NewMessage(pattern=r'^/daily(?:@\w+)?$'))
 async def daily_handler(event):
     user_id = event.sender_id
     now = time.time()
@@ -783,7 +696,6 @@ async def daily_handler(event):
 
 # ---- /slot ----
 SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
-@bot1.on(events.NewMessage(pattern=r'^/slot(?:@\w+)?(?:\s+(\d+))?'))
 async def slot_handler(event):
     args = event.pattern_match.group(1)
     if not args:
@@ -822,9 +734,7 @@ async def slot_handler(event):
         await reply_tag(event, final)
 
 # ---- /top /gtop ----
-@bot1.on(events.NewMessage(pattern=r'^/top(?:@\w+)?$'))
 async def top_handler(event): await send_leaderboard(event, "local")
-@bot1.on(events.NewMessage(pattern=r'^/gtop(?:@\w+)?$'))
 async def gtop_handler(event): await send_leaderboard(event, "global")
 
 async def send_leaderboard(event, scope):
@@ -853,8 +763,7 @@ async def send_leaderboard(event, scope):
         msg += f"{medals[i]} {name} — {val:,} catches\n"
     await reply_tag(event, msg)
 
-# ---- /tr (Translator) ----
-@bot1.on(events.NewMessage(pattern=r'^/tr(?:@\w+)?(.*)'))
+# ---- /tr ----
 async def translate_command(event):
     text = event.pattern_match.group(1).strip()
     if not text and event.is_reply:
@@ -870,8 +779,7 @@ async def translate_command(event):
     except:
         await reply_tag(event, "⚠️ Translation failed.")
 
-# ---- /calc (Auto Calculator) ----
-@bot1.on(events.NewMessage)
+# ---- auto_calc ----
 async def auto_calc(event):
     if event.text and event.text.startswith('/'):
         return
@@ -891,7 +799,6 @@ async def auto_calc(event):
             pass
 
 # ---- /id ----
-@bot1.on(events.NewMessage(pattern=r'^/id(?:@\w+)?$'))
 async def id_handler(event):
     target = await event.get_sender() if not event.is_reply else await (await event.get_reply_message()).get_sender()
     uid = target.id
@@ -900,7 +807,6 @@ async def id_handler(event):
     await reply_tag(event, f"👤 {name}\n🆔 {uid}\n🌐 {username}\n📌 Chat: {event.chat_id}")
 
 # ---- /help ----
-@bot1.on(events.NewMessage(pattern=r'^/help(?:@\w+)?$'))
 async def help_handler(event):
     help_text = (
         "🤖 Commands\n\n"
@@ -912,7 +818,6 @@ async def help_handler(event):
     await reply_tag(event, help_text)
 
 # ---- /gban ----
-@bot1.on(events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)(?:\s+(.*))?$'))
 async def gban_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -922,17 +827,7 @@ async def gban_handler(event):
     await banned_users_col.update_one({"user_id": uid}, {"$set": {"banned": True, "reason": reason}}, upsert=True)
     await reply_tag(event, f"✅ User {uid} banned.")
 
-@bot1.on(events.NewMessage(pattern=r'^/'))
-async def check_ban(event):
-    if event.sender_id == OWNER_ID:
-        return
-    banned = await banned_users_col.find_one({"user_id": event.sender_id})
-    if banned and banned.get("banned", False):
-        await reply_tag(event, "❌ You are banned.")
-        raise events.StopPropagation
-
-
-@bot1.on(events.NewMessage(pattern=r'^/unban(?:@\w+)?\s+(\d+)$'))
+# ---- /unban ----
 async def unban_handler(event):
     if event.sender_id != OWNER_ID:
         await reply_tag(event, "❌ Owner only.")
@@ -943,15 +838,42 @@ async def unban_handler(event):
         await reply_tag(event, f"✅ User {uid} unbanned.")
     else:
         await reply_tag(event, f"❌ User {uid} is not banned.")
-# ==========================================
-# 🔄 CALLBACK QUERY HANDLERS
-# ==========================================
-@bot1.on(events.CallbackQuery)
+
+# ---- check_ban ----
+async def check_ban(event):
+    if event.sender_id == OWNER_ID:
+        return
+    banned = await banned_users_col.find_one({"user_id": event.sender_id})
+    if banned and banned.get("banned", False):
+        await reply_tag(event, "❌ You are banned.")
+        raise events.StopPropagation
+
+# ---- message_counter ----
+async def message_counter_for_spawn(event):
+    if event.is_private or event.chat_id == SPECIFIC_GROUP:
+        return
+    chat_id = event.chat_id
+    if chat_id in active_spawns:
+        return
+    disabled = await spawn_disabled_col.find_one({"chat_id": chat_id})
+    if disabled and disabled.get("disabled", False):
+        return
+    config = await groups_config_col.find_one({"chat_id": chat_id})
+    target = config.get("spawn_target", 50) if config else 50
+    counter_doc = await groups_counters_col.find_one_and_update(
+        {"chat_id": chat_id},
+        {"$inc": {"counter": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
+    if counter_doc and counter_doc.get("counter", 0) >= target:
+        await groups_counters_col.update_one({"chat_id": chat_id}, {"$set": {"counter": 0}})
+        await trigger_dynamic_spawn(chat_id)
+
+# ---- Callback Query ----
 async def callback_handler(event):
     data = event.data.decode('utf-8')
     user_id = event.sender_id
-    
-    # Harem Pagination
     if data.startswith("hpage_"):
         parts = data.split("_")
         page = int(parts[1])
@@ -960,23 +882,17 @@ async def callback_handler(event):
             await event.answer("⚠️ This is not your harem.", alert=True)
             return
         await event.answer()
-        # Get original message and edit
         msg = await event.get_message()
         await send_harem_page(event, target_user_id, page=page, edit_msg_id=msg.id, callback_query=event)
         return
-    
-    # Go to HMODE from harem
     if data.startswith("goto_hmode_"):
         target_user_id = int(data.split("_")[2])
         if user_id != target_user_id:
             await event.answer("⚠️ This is not your menu.", alert=True)
             return
         await event.answer("Opening Rarity Filter...")
-        # Simulate /hmode by sending a new message or editing
         await hmode_handler(event)
         return
-    
-    # HMODE Filter selection
     if data.startswith("hfilter_"):
         parts = data.split("_")
         if parts[1] == "clear":
@@ -986,8 +902,6 @@ async def callback_handler(event):
             rarity = parts[1]
             await users_catcher_col.update_one({"user_id": user_id}, {"$set": {"rarity_filter": rarity}}, upsert=True)
             await event.answer(f"✅ Priority set to {rarity}", alert=True)
-        
-        # Update the hmode message to reflect change
         try:
             await hmode_handler(event)
         except:
@@ -998,12 +912,39 @@ async def callback_handler(event):
 # 🚀 STARTUP
 # ==========================================
 async def startup():
-    global bot1  # ✅ ဒီစာကြောင်း ထည့်ပါ (bot1 ကို အပြင်ကနေသုံးလို့ရအောင်)
-    
-    print("Starting bot...")
-    
-    # ✅ ဒီမှာ bot1 ကို အသက်သွင်းပါ
+    global bot1
     bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH)
+    
+    # Register all handlers
+    bot1.add_event_handler(message_counter_for_spawn, events.NewMessage(incoming=True))
+    bot1.add_event_handler(catch_handler, events.NewMessage(pattern=r'^(?:/gases|/catch)(?:@\w+)?\s+(.+)$'))
+    bot1.add_event_handler(w_handler, events.NewMessage(pattern=r'^/w(?:@\w+)?$'))
+    bot1.add_event_handler(who_reveal_handler, events.NewMessage(pattern=r'^/who(?:@\w+)?$'))
+    bot1.add_event_handler(hmode_handler, events.NewMessage(pattern=r'^/hmode(?:@\w+)?$'))
+    bot1.add_event_handler(harem_handler, events.NewMessage(pattern=r'^/harem(?:@\w+)?$'))
+    bot1.add_event_handler(harem_inline, events.InlineQuery)
+    bot1.add_event_handler(myinfo_handler, events.NewMessage(pattern=r'^/myinfo(?:@\w+)?$'))
+    bot1.add_event_handler(check_handler, events.NewMessage(pattern=r'^/check(?:@\w+)?\s+(\S+)$'))
+    bot1.add_event_handler(addcharacter_handler, events.NewMessage(pattern=r'^/addcharacter(?:@\w+)?\s+(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)(?:\s*\|\s*(\d+))?$'))
+    bot1.add_event_handler(removecharacter_handler, events.NewMessage(pattern=r'^/removecharacter(?:@\w+)?\s+(\S+)$'))
+    bot1.add_event_handler(force_spawn, events.NewMessage(pattern=r'^/fspawn(?:@\w+)?(?:\s+([-\d]+))?$'))
+    bot1.add_event_handler(spawn_toggle, events.NewMessage(pattern=r'^/spawnoff(?:@\w+)?\s+([-\d]+)(?:\s+(on|off))?$'))
+    bot1.add_event_handler(spawn_stats, events.NewMessage(pattern=r'^/spawnstats(?:@\w+)?(?:\s+([-\d]+))?$'))
+    bot1.add_event_handler(changetime_handler, events.NewMessage(pattern=r'^/changetime(?:@\w+)?\s+(\d+)(?:\s+(\d+))?$'))
+    bot1.add_event_handler(status_handler, events.NewMessage(pattern=r'^/status(?:@\w+)?$'))
+    bot1.add_event_handler(balance_handler, events.NewMessage(pattern=r'^/balance(?:@\w+)?$'))
+    bot1.add_event_handler(daily_handler, events.NewMessage(pattern=r'^/daily(?:@\w+)?$'))
+    bot1.add_event_handler(slot_handler, events.NewMessage(pattern=r'^/slot(?:@\w+)?(?:\s+(\d+))?'))
+    bot1.add_event_handler(top_handler, events.NewMessage(pattern=r'^/top(?:@\w+)?$'))
+    bot1.add_event_handler(gtop_handler, events.NewMessage(pattern=r'^/gtop(?:@\w+)?$'))
+    bot1.add_event_handler(translate_command, events.NewMessage(pattern=r'^/tr(?:@\w+)?(.*)'))
+    bot1.add_event_handler(auto_calc, events.NewMessage)
+    bot1.add_event_handler(id_handler, events.NewMessage(pattern=r'^/id(?:@\w+)?$'))
+    bot1.add_event_handler(help_handler, events.NewMessage(pattern=r'^/help(?:@\w+)?$'))
+    bot1.add_event_handler(gban_handler, events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)(?:\s+(.*))?$'))
+    bot1.add_event_handler(unban_handler, events.NewMessage(pattern=r'^/unban(?:@\w+)?\s+(\d+)$'))
+    bot1.add_event_handler(check_ban, events.NewMessage(pattern=r'^/'))
+    bot1.add_event_handler(callback_handler, events.CallbackQuery)
     
     await users_catcher_col.create_index("user_id", unique=True)
     await characters_base_col.create_index("char_id", unique=True)
