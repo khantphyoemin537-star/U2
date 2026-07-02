@@ -131,7 +131,7 @@ async def add_balance(user_id, amount):
 # ==========================================
 # Bot Client
 # ==========================================
-bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH)
+bot1 = None 
 
 # ==========================================
 # Character Spawn System
@@ -998,7 +998,13 @@ async def callback_handler(event):
 # 🚀 STARTUP
 # ==========================================
 async def startup():
+    global bot1  # ✅ ဒီစာကြောင်း ထည့်ပါ (bot1 ကို အပြင်ကနေသုံးလို့ရအောင်)
+    
     print("Starting bot...")
+    
+    # ✅ ဒီမှာ bot1 ကို အသက်သွင်းပါ
+    bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH)
+    
     await users_catcher_col.create_index("user_id", unique=True)
     await characters_base_col.create_index("char_id", unique=True)
     await groups_col.create_index("chat_id", unique=True)
