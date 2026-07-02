@@ -291,7 +291,7 @@ async def catch_handler(event):
         await reply_tag(event, success_text)
 
 # ---- /w ----
-@bot1.on(events.NewMessage(pattern=r'^(?:/w|/who)(?:@\w+)?$'))
+@bot1.on(events.NewMessage(pattern=r'^(?:/w|/waifu)(?:@\w+)?$'))
 async def who_reveal_handler(event):
     if event.is_private:
         return
@@ -546,6 +546,8 @@ async def check_handler(event):
     if not char_doc:
         await reply_tag(event, "❌ Character not found.")
         return
+    
+    # 📸 ပုံကို ဆွဲယူမယ်
     media = None
     try:
         stored = await bot1.get_messages(STORAGE_CHANNEL, ids=char_doc.get("storage_msg_id"))
@@ -553,33 +555,62 @@ async def check_handler(event):
             media = stored.media
     except:
         pass
-    rarity = char_doc.get("rarity", "Unknown")
-    info = (
-        f"🃏 Card Details\n"
-        f"ID: {char_id}\n"
-        f"Name: {char_doc['name']}\n"
-        f"Series: {char_doc['series']}\n"
-        f"Rarity: {rarity}\n"
-        f"Spawn count: {char_doc.get('spawn_count', 0)}\n"
-        f"Max Spawn: {char_doc.get('spawn_limit', 0)}\n"
-        f"Events: {char_doc.get('events', 'None')}"
-    )
+    
+    # 🏆 ပိုင်ရှင်တွေကို ဆွဲယူမယ်
     pipeline = [
         {"$match": {"harem.char_id": char_id}},
         {"$project": {"fullname": 1, "count": {"$size": {"$filter": {"input": "$harem", "as": "item", "cond": {"$eq": ["$$item.char_id", char_id]}}}}}},
         {"$sort": {"count": -1}}, {"$limit": 5}
     ]
     owners = await users_catcher_col.aggregate(pipeline).to_list(length=5)
+    
+    # 📝 စာသားကို သန့်သန့်ရှင်းရှင်း ပြင်ဆင်မယ်
+    rarity = char_doc.get("rarity", "Unknown")
+    rarity_emoji = RARITY_EMOJI.get(rarity, "")
+    spawn_count = char_doc.get("spawn_count", 0)
+    spawn_limit = char_doc.get("spawn_limit", 0)
+    
+    # 🃏 Card Details
+    info_lines = [
+        " CARD DETAILS",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🆔 ID: {char_id}",
+        f"📛 Name: {char_doc['name']}",
+        f"📺 Series: {char_doc['series']}",
+        f"💎 Rarity: {rarity_emoji} {rarity}",
+        f"📈 Spawn count: {spawn_count}",
+    ]
+    if spawn_limit > 0:
+        info_lines.append(f"🔒 Max Spawn: {spawn_limit}")
+    if char_doc.get('events'):
+        info_lines.append(f"🏷️ Events: {char_doc['events']}")
+    
+    # 🏆 Top Owners (နှိပ်လို့ရအောင် ပြင်ထားတယ်)
     if owners:
-        info += "\n\nTop Owners:"
+        info_lines.append("")
+        info_lines.append("🏆 TOP OWNERS")
+        info_lines.append("━━━━━━━━━━━━━━━━━━━━")
         for i, o in enumerate(owners, 1):
-            name = o.get("fullname") or f"User {o['user_id']}"
-            info += f"\n{i}. {name} — x{o['count']}"
-    if media:
-        await bot1.send_file(event.chat_id, media, caption=info + TAGLINE, parse_mode='html')
+            mention = await get_mention(bot1, o['user_id'], o.get('fullname'))
+            count = o['count']
+            info_lines.append(f"{i}. {mention} — x{count}")
     else:
-        await reply_tag(event, info)
-
+        info_lines.append("")
+        info_lines.append("📭 No one owns this card yet.")
+    
+    # 📝 စာသားအားလုံးကို ပေါင်းပြီး ပို့မယ်
+    full_text = "\n".join(info_lines)
+    
+    # 📸 ပုံနဲ့တကွ ပို့မယ်
+    if media:
+        await bot1.send_file(
+            event.chat_id,
+            media,
+            caption=full_text + TAGLINE,
+            parse_mode='html'
+        )
+    else:
+        await reply_tag(event, f"<code>{full_text}</code>")
 # ---- /addcharacter (Name | Series | Rarity | ID | Events | SpawnLimit) ----
 @bot1.on(events.NewMessage(pattern=r'^/addcharacter(?:@\w+)?\s+(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)\s*\|\s*(.+)(?:\s*\|\s*(\d+))?$'))
 async def addcharacter_handler(event):
