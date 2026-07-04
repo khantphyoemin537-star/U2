@@ -238,6 +238,61 @@ async def message_counter_for_spawn(event):
         await groups_counters_col.update_one({"chat_id": chat_id}, {"$set": {"counter": 0}})
         await trigger_dynamic_spawn(chat_id)
 
+async def on_bot_added(event):
+    """Bot ကို Group ထဲ Add ခံရင် Owner ကို အကြောင်းကြားမယ်"""
+    if not event.user_added:
+        return
+
+    # ကိုယ့် Bot ကိုပဲ စစ်မယ်
+    me = await bot1.get_me()
+    if event.user_id != me.id:
+        return
+
+    # Group မှသာ လုပ်ဆောင်မယ်
+    if not event.chat.is_group:
+        return
+
+    chat = event.chat
+    chat_id = chat.id
+    chat_title = chat.title or "Unknown Group"
+
+    # Member Count ရယူရန် ကြိုးစားမယ်
+    try:
+        # participants_count ကို Chat ကနေ ရယူ
+        full_chat = await bot1.get_entity(chat_id)
+        member_count = getattr(full_chat, 'participants_count', 'Unknown')
+    except:
+        member_count = "Unknown"
+
+    # Spawn Config နဲ့ Counter ကိုပါ ထည့်ပေးမယ် (Status အတွက်)
+    config = await groups_config_col.find_one({"chat_id": chat_id})
+    target = config.get("spawn_target", 50) if config else 50
+
+    counter_doc = await groups_counters_col.find_one({"chat_id": chat_id})
+    counter = counter_doc.get("counter", 0) if counter_doc else 0
+
+    disabled = await spawn_disabled_col.find_one({"chat_id": chat_id})
+    disabled_status = "Disabled ⛔" if disabled and disabled.get("disabled") else "Enabled ✅"
+
+    # ပို့မယ့် Message ကို ဖွဲ့မယ်
+    msg = (
+        f"🤖 **Bot Added to Group**\n\n"
+        f"📛 **Name:** {chat_title}\n"
+        f"🆔 **ID:** `{chat_id}`\n"
+        f"👥 **Members:** {member_count}\n"
+        f"\n📊 **Spawn Status:**\n"
+        f"├─ Target: {target}\n"
+        f"├─ Current Count: {counter}\n"
+        f"├─ Remaining: {max(0, target - counter)}\n"
+        f"└─ Spawn: {disabled_status}"
+    )
+
+    # Owner ဆီကို DM ပို့မယ်
+    try:
+        await bot1.send_message(OWNER_ID, msg, parse_mode='markdown')
+    except Exception as e:
+        logging.error(f"Failed to notify owner: {e}")
+
 # ---- /gases (or /catch) ----
 async def catch_handler(event):
     if event.is_private:
@@ -267,7 +322,7 @@ async def catch_handler(event):
         await reply_tag(event, "❌ Wrong name! Reply to the spawn message with  to see the exact name.")
         return
 
-    temp_msg = await event.reply("🔎 Checking...")
+    temp_msg = await event.reply("🍓")
     await asyncio.sleep(1.5)
 
     async with spawn_locks[chat_id]:
@@ -1310,6 +1365,7 @@ async def startup():
     bot1.add_event_handler(check_ban, events.NewMessage(pattern=r'^/'))
     bot1.add_event_handler(message_counter_for_spawn, events.NewMessage(incoming=True))
     bot1.add_event_handler(start_handler, events.NewMessage(pattern=r'^/start(?:@\w+)?$'))
+    bot1.add_event_handler(on_bot_added, events.ChatAction)
     bot1.add_event_handler(catch_handler, events.NewMessage(pattern=r'^(?:/gases|/catch)(?:@\w+)?(?:\s+(.+))?$'))
     bot1.add_event_handler(reveal_spawn_handler, events.NewMessage(pattern=r'^/(?:w|who|waifu)(?:@\w+)?$'))
     bot1.add_event_handler(hmode_handler, events.NewMessage(pattern=r'^/hmode(?:@\w+)?$'))
