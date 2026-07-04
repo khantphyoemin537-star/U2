@@ -12,6 +12,8 @@ from html import escape as escape_html
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, errors, Button
+from telethon.tl.functions.channels import GetParticipantRequest
+from telethon.errors import UserNotParticipantError
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 from deep_translator import GoogleTranslator
@@ -29,9 +31,13 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 SPECIFIC_GROUP = int(os.getenv("SPECIFIC_GROUP"))
 SPECIFIC_CONTROL_GROUP = int(os.getenv("SPECIFIC_CONTROL_GROUP", SPECIFIC_GROUP))
 
+# Force Join Configurations
+REQUIRED_GROUP_ID = int(os.getenv("REQUIRED_GROUP_ID", "0"))
+REQUIRED_GROUP_LINK = os.getenv("REQUIRED_GROUP_LINK", "https://t.me/your_group_link")
+
 STORAGE_CHANNEL = SPECIFIC_CONTROL_GROUP
 CARDS_PER_PAGE = 10
-HAREM_PAGE_CHAR_BUDGET = 700  # leaves headroom under Telegram's 1024-char caption cap for the header/footer
+HAREM_PAGE_CHAR_BUDGET = 700 
 
 # ==========================================
 # 🌐 Render Port-Binding Fix
@@ -239,7 +245,6 @@ async def message_counter_for_spawn(event):
         await trigger_dynamic_spawn(chat_id)
 
 async def on_bot_added(event):
-    """Bot ကို Group ထဲ Add/Remove လုပ်တာကို စီမံခန့်ခွဲပြီး Owner ကို အကြောင်းကြားမယ်"""
     if not event.is_group:
         return
 
@@ -251,9 +256,7 @@ async def on_bot_added(event):
     chat = await event.get_chat()
     chat_title = getattr(chat, 'title', 'Unknown Group') or "Unknown Group"
 
-    # Bot Group ထဲဝင်သွားတဲ့အချိန် (Added or Joined)
     if event.user_added or event.user_joined:
-        # Save group to database so /status can query correctly
         await groups_col.update_one(
             {"chat_id": chat_id},
             {"$set": {"chat_id": chat_id, "title": chat_title, "timestamp": time.time()}},
@@ -292,9 +295,7 @@ async def on_bot_added(event):
         except Exception as e:
             logging.error(f"Failed to notify owner on join: {e}")
 
-    # Bot Group ထဲက ထွက်သွားတဲ့အချိန် သို့မဟုတ် အကန်ခံရတဲ့အချိန်
     elif event.user_left or event.user_kicked:
-        # Remove group from database
         await groups_col.delete_one({"chat_id": chat_id})
         
         msg = (
@@ -747,11 +748,9 @@ async def harem_inline(event):
             event_note = char_data.get("events")
             event_line = str(event_note) if event_note and str(event_note).lower() != "none" else "None"
             
-            # Get specific rarity and emoji
             rarity_str = card.get('rarity', 'Unknown')
             rarity_emoji = RARITY_EMOJI.get(rarity_str, '')
 
-            # Formatted text with Id and Emoji
             caption = (
                 f"Wow, Check {escape_html(owner_fullname)}'s character card.\n"
                 f"Id- <code>{escape_html(str(char_id))}</code>\n"
@@ -1019,7 +1018,6 @@ async def status_handler(event):
     waifu_pipeline = [{"$group": {"_id": None, "total": {"$sum": {"$size": "$harem"}}}}]
     rarity_pipeline = [{"$unwind": "$harem"}, {"$group": {"_id": "$harem.rarity", "count": {"$sum": 1}}}]
 
-    # Concurrent stats processing
     total_chats, total_users, total_harems, anime_list, waifu_res, rarity_res = await asyncio.gather(
         groups_col.count_documents({}),
         users_catcher_col.count_documents({}),
@@ -1249,14 +1247,32 @@ async def unban_handler(event):
     else:
         await reply_tag(event, f"❌ User {uid} is not banned.")
 
-# ---- check_ban ----
-async def check_ban(event):
+# ---- Global Pre-Check (Ban & Force Join) ----
+async def pre_check_handler(event):
     if event.sender_id == OWNER_ID:
         return
+
+    # 1. Ban Check
     banned = await banned_users_col.find_one({"user_id": event.sender_id})
     if banned and banned.get("banned", False):
         await reply_tag(event, "❌ You are banned.")
         raise events.StopPropagation
+
+    # 2. Force Join Check
+    if REQUIRED_GROUP_ID:
+        try:
+            await bot1(GetParticipantRequest(channel=REQUIRED_GROUP_ID, participant=event.sender_id))
+        except UserNotParticipantError:
+            join_text = (
+                "👋 **မင်္ဂလာပါခင်ဗျာ!**\n\n"
+                "ဒီ Bot ကို အသုံးပြုနိုင်ဖို့အတွက် ဦးစွာ ကျွန်တော်တို့ရဲ့ **Official Group** ထဲသို့ ဝင်ရောက်ပေးရန် လိုအပ်ပါတယ်ခင်ဗျာ။\n\n"
+                "Group ထဲဝင်ပြီးမှ Bot ကို စိတ်ကြိုက် ဆက်လက်အသုံးပြုနိုင်မှာဖြစ်ပါတယ်!"
+            )
+            buttons = [[Button.url("💬 Join Group Here", REQUIRED_GROUP_LINK)]]
+            await event.reply(join_text, buttons=buttons)
+            raise events.StopPropagation
+        except Exception as e:
+            logging.error(f"Force Join Check Error: {e}")
 
 # ---- Callback Query ----
 async def callback_handler(event):
@@ -1369,7 +1385,9 @@ async def startup():
     threading.Thread(target=_start_health_server, daemon=True).start()
     bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH)
     
-    bot1.add_event_handler(check_ban, events.NewMessage(pattern=r'^/'))
+    # Pre-check registers first to intercept all commands
+    bot1.add_event_handler(pre_check_handler, events.NewMessage(pattern=r'^/'))
+    
     bot1.add_event_handler(message_counter_for_spawn, events.NewMessage(incoming=True))
     bot1.add_event_handler(start_handler, events.NewMessage(pattern=r'^/start(?:@\w+)?$'))
     bot1.add_event_handler(on_bot_added, events.ChatAction)
