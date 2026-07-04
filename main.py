@@ -239,59 +239,73 @@ async def message_counter_for_spawn(event):
         await trigger_dynamic_spawn(chat_id)
 
 async def on_bot_added(event):
-    """Bot ကို Group ထဲ Add ခံရင် Owner ကို အကြောင်းကြားမယ်"""
-    if not event.user_added:
+    """Bot ကို Group ထဲ Add/Remove လုပ်တာကို စီမံခန့်ခွဲပြီး Owner ကို အကြောင်းကြားမယ်"""
+    if not event.is_group:
         return
 
-    # ကိုယ့် Bot ကိုပဲ စစ်မယ်
     me = await bot1.get_me()
     if event.user_id != me.id:
         return
 
-    # Group မှသာ လုပ်ဆောင်မယ်
-    if not event.chat.is_group:
-        return
+    chat_id = event.chat_id
+    chat = await event.get_chat()
+    chat_title = getattr(chat, 'title', 'Unknown Group') or "Unknown Group"
 
-    chat = event.chat
-    chat_id = chat.id
-    chat_title = chat.title or "Unknown Group"
+    # Bot Group ထဲဝင်သွားတဲ့အချိန် (Added or Joined)
+    if event.user_added or event.user_joined:
+        # Save group to database so /status can query correctly
+        await groups_col.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"chat_id": chat_id, "title": chat_title, "timestamp": time.time()}},
+            upsert=True
+        )
 
-    # Member Count ရယူရန် ကြိုးစားမယ်
-    try:
-        # participants_count ကို Chat ကနေ ရယူ
-        full_chat = await bot1.get_entity(chat_id)
-        member_count = getattr(full_chat, 'participants_count', 'Unknown')
-    except:
-        member_count = "Unknown"
+        try:
+            full_chat = await bot1.get_entity(chat_id)
+            member_count = getattr(full_chat, 'participants_count', 'Unknown')
+        except:
+            member_count = "Unknown"
 
-    # Spawn Config နဲ့ Counter ကိုပါ ထည့်ပေးမယ် (Status အတွက်)
-    config = await groups_config_col.find_one({"chat_id": chat_id})
-    target = config.get("spawn_target", 50) if config else 50
+        config = await groups_config_col.find_one({"chat_id": chat_id})
+        target = config.get("spawn_target", 50) if config else 50
 
-    counter_doc = await groups_counters_col.find_one({"chat_id": chat_id})
-    counter = counter_doc.get("counter", 0) if counter_doc else 0
+        counter_doc = await groups_counters_col.find_one({"chat_id": chat_id})
+        counter = counter_doc.get("counter", 0) if counter_doc else 0
 
-    disabled = await spawn_disabled_col.find_one({"chat_id": chat_id})
-    disabled_status = "Disabled ⛔" if disabled and disabled.get("disabled") else "Enabled ✅"
+        disabled = await spawn_disabled_col.find_one({"chat_id": chat_id})
+        disabled_status = "Disabled ⛔" if disabled and disabled.get("disabled") else "Enabled ✅"
 
-    # ပို့မယ့် Message ကို ဖွဲ့မယ်
-    msg = (
-        f"🤖 **Bot Added to Group**\n\n"
-        f"📛 **Name:** {chat_title}\n"
-        f"🆔 **ID:** `{chat_id}`\n"
-        f"👥 **Members:** {member_count}\n"
-        f"\n📊 **Spawn Status:**\n"
-        f"├─ Target: {target}\n"
-        f"├─ Current Count: {counter}\n"
-        f"├─ Remaining: {max(0, target - counter)}\n"
-        f"└─ Spawn: {disabled_status}"
-    )
+        msg = (
+            f"🤖 **Bot Added to Group**\n\n"
+            f"📛 **Name:** {chat_title}\n"
+            f"🆔 **ID:** `{chat_id}`\n"
+            f"👥 **Members:** {member_count}\n"
+            f"\n📊 **Spawn Status:**\n"
+            f"├─ Target: {target}\n"
+            f"├─ Current Count: {counter}\n"
+            f"├─ Remaining: {max(0, target - counter)}\n"
+            f"└─ Spawn: {disabled_status}"
+        )
 
-    # Owner ဆီကို DM ပို့မယ်
-    try:
-        await bot1.send_message(OWNER_ID, msg, parse_mode='markdown')
-    except Exception as e:
-        logging.error(f"Failed to notify owner: {e}")
+        try:
+            await bot1.send_message(OWNER_ID, msg, parse_mode='markdown')
+        except Exception as e:
+            logging.error(f"Failed to notify owner on join: {e}")
+
+    # Bot Group ထဲက ထွက်သွားတဲ့အချိန် သို့မဟုတ် အကန်ခံရတဲ့အချိန်
+    elif event.user_left or event.user_kicked:
+        # Remove group from database
+        await groups_col.delete_one({"chat_id": chat_id})
+        
+        msg = (
+            f"❌ **Bot Removed from Group**\n\n"
+            f"📛 **Name:** {chat_title}\n"
+            f"🆔 **ID:** `{chat_id}`"
+        )
+        try:
+            await bot1.send_message(OWNER_ID, msg, parse_mode='markdown')
+        except Exception as e:
+            logging.error(f"Failed to notify owner on leave: {e}")
 
 # ---- /gases (or /catch) ----
 async def catch_handler(event):
@@ -375,9 +389,7 @@ async def catch_handler(event):
         )
         await reply_tag(event, success_text, parse_mode='html')
 
-# ---- /w, /who, /waifu — all one command: reply to the spawn message to reveal it ----
-# (previously /w skipped the reply requirement and revealed the name to anyone who typed
-# it, which defeated the whole point of hiding the name in the spawn caption)
+# ---- /w, /who, /waifu ----
 async def reveal_spawn_handler(event):
     if event.is_private:
         return
@@ -463,7 +475,6 @@ async def harem_handler(event):
     await send_harem_overview(event, target_user_id, viewer_id=user_id, page=1)
 
 async def build_harem_cards(harem, rarity_filter=None):
-    """One flat block per unique owned character, most-recently-caught first."""
     counts, latest_catch = {}, {}
     for c in harem:
         cid = c.get("char_id")
@@ -488,7 +499,6 @@ async def build_harem_cards(harem, rarity_filter=None):
 
     ordered_ids = sorted(counts.keys(), key=lambda cid: latest_catch.get(cid, 0), reverse=True)
     if rarity_filter:
-        # keep recency order, just bring the prioritized rarity to the top (stable sort)
         ordered_ids.sort(key=lambda cid: 0 if classify_rarity(char_by_id.get(cid, {}).get("rarity", "")) == rarity_filter else 1)
 
     blocks = []
@@ -509,7 +519,6 @@ async def build_harem_cards(harem, rarity_filter=None):
     return blocks
 
 def paginate_harem_cards(card_blocks, budget=HAREM_PAGE_CHAR_BUDGET):
-    """Pack whole card-blocks onto pages without exceeding Telegram's caption limit."""
     pages, current, current_len = [], [], 0
     for block in card_blocks:
         block_len = len(block) + 2
@@ -561,7 +570,6 @@ async def send_harem_overview(event, target_user_id, viewer_id=None, page=1, edi
     if is_own:
         caption += "\n\n⭐ /fav [ID] — set favorite   🎁 /gift [ID] — gift a card (reply to recipient)"
 
-    # Auto-pick a random favorite for the header photo if none is set yet
     fav_id = doc.get("fav_card")
     fav_card = next((c for c in harem if c.get("char_id") == fav_id), None) if fav_id else None
     if not fav_card:
@@ -698,7 +706,7 @@ async def gift_handler(event):
     else:
         await event.reply(prompt, parse_mode='html', buttons=buttons)
 
-# ---- Inline Query ----
+# ---- Inline Query (Character Cards) ----
 async def harem_inline(event):
     query_text = (event.text or "").strip()
     if not query_text.startswith("harem."):
@@ -707,8 +715,7 @@ async def harem_inline(event):
         target_user_id = int(query_text.split(".", 1)[1])
     except (ValueError, IndexError):
         return
-    # Read-only browsing — anyone can inline-query anyone's vault this way, same as
-    # paging through /harem itself. No ownership check needed here.
+
     doc = await users_catcher_col.find_one({"user_id": target_user_id})
     if not doc or not doc.get("harem"):
         await event.answer([], switch_pm="📭 This vault is empty!", switch_pm_param="start")
@@ -739,12 +746,20 @@ async def harem_inline(event):
                 continue
             event_note = char_data.get("events")
             event_line = str(event_note) if event_note and str(event_note).lower() != "none" else "None"
+            
+            # Get specific rarity and emoji
+            rarity_str = card.get('rarity', 'Unknown')
+            rarity_emoji = RARITY_EMOJI.get(rarity_str, '')
+
+            # Formatted text with Id and Emoji
             caption = (
                 f"Wow, Check {escape_html(owner_fullname)}'s character card.\n"
+                f"Id- <code>{escape_html(str(char_id))}</code>\n"
                 f"Name- {escape_html(card.get('name', 'Unknown'))}\n"
                 f"Event- {escape_html(event_line)}\n"
-                f"Rarity- {escape_html(str(card.get('rarity', 'Unknown')))}"
+                f"Rarity- {rarity_emoji} {escape_html(str(rarity_str))}"
             )
+            
             if stored_msg.photo:
                 results.append(builder.photo(
                     file=stored_msg.media,
@@ -1004,7 +1019,7 @@ async def status_handler(event):
     waifu_pipeline = [{"$group": {"_id": None, "total": {"$sum": {"$size": "$harem"}}}}]
     rarity_pipeline = [{"$unwind": "$harem"}, {"$group": {"_id": "$harem.rarity", "count": {"$sum": 1}}}]
 
-    # Run every stat query concurrently instead of one-by-one so /status stays snappy.
+    # Concurrent stats processing
     total_chats, total_users, total_harems, anime_list, waifu_res, rarity_res = await asyncio.gather(
         groups_col.count_documents({}),
         users_catcher_col.count_documents({}),
@@ -1113,10 +1128,6 @@ async def send_leaderboard(event, scope):
     medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
     for i, doc in enumerate(top):
         uid = doc.get("user_id")
-        # NOTE: doc.get(field, 0) can't resolve a dotted path like
-        # "group_catches.<chat_id>" on a plain dict (that dotted syntax only works
-        # inside a Mongo query) — it has to be looked up by traversing the nested
-        # dict directly, otherwise the local leaderboard always showed 0 catches.
         if scope == "local":
             val = (doc.get("group_catches") or {}).get(group_key, 0)
         else:
@@ -1151,10 +1162,6 @@ async def auto_calc(event):
     math_expr = text.replace("÷", "/").replace("×", "*").replace("^", "**")
     if re.match(r'^[0-9.+\-*/()%\s]+$', math_expr) and any(op in math_expr for op in "+-*/%"):
         try:
-            # Guard against catastrophic exponentiation, e.g. "9**9**9" (right-
-            # associative -> 9**387420489) would sail past a plain length check
-            # and hang/exhaust memory on eval. Block chained "**" and cap the size
-            # of any single exponent instead.
             if "**" in math_expr:
                 if math_expr.count("**") > 1:
                     return
@@ -1405,3 +1412,4 @@ async def startup():
 
 if __name__ == "__main__":
     asyncio.run(startup())
+
