@@ -30,17 +30,13 @@ SPECIFIC_GROUP = int(os.getenv("SPECIFIC_GROUP"))
 SPECIFIC_CONTROL_GROUP = int(os.getenv("SPECIFIC_CONTROL_GROUP", SPECIFIC_GROUP))
 
 STORAGE_CHANNEL = SPECIFIC_CONTROL_GROUP
-TAGLINE = "\n\nAlso try this @Imjustkidding_bot"
 CARDS_PER_PAGE = 10
-HAREM_PAGE_CHAR_BUDGET = 900  # keep grouped /harem pages under Telegram's 1024-char photo-caption limit
+HAREM_PAGE_CHAR_BUDGET = 900
 HAREM_DIVIDER = "┄" * 18
 
 # ==========================================
 # 🌐 Render Port-Binding Fix
 # ==========================================
-# Render's "Web Service" type kills/restarts deploys that never open a port.
-# Telethon bots don't need a port, so we spin up a tiny dummy HTTP server
-# just so Render's port scanner is satisfied. Harmless no-op if unused.
 def _start_health_server():
     port = int(os.getenv("PORT", "8080"))
 
@@ -52,7 +48,7 @@ def _start_health_server():
             self.wfile.write(b"OK - bot is running")
 
         def log_message(self, *args):
-            pass  # silence default request logging
+            pass
 
     try:
         server = HTTPServer(("0.0.0.0", port), _Handler)
@@ -113,12 +109,7 @@ spawn_locks = defaultdict(asyncio.Lock)
 # Helpers
 # ==========================================
 async def reply_tag(event, text, **kwargs):
-    if TAGLINE not in text: text += TAGLINE
     await event.reply(text, **kwargs)
-
-def bl(mm_text, en_text):
-    """Bilingual message helper: Myanmar text + English text stacked together."""
-    return f"{mm_text}\n\n🇬🇧 {en_text}"
 
 async def get_mention(client, user_id, name=None):
     if name is None:
@@ -211,15 +202,7 @@ async def trigger_dynamic_spawn(chat_id):
             return
     except:
         return
-    # NOTE: spawn_count is incremented in catch_handler (on actual catch), not here.
-    # Counting it at spawn time meant spawn_limit capped how often a character could
-    # *appear*, even if nobody ever caught it — so /check's stats and the limit itself
-    # never reflected real catches. It now tracks catches, matching what admins expect
-    # "Max Spawn" to mean and what /check reports.
-    caption = bl(
-        "🔱 ဇာတ်ကောင်တစ်ကောင် ပေါ်လာပါပြီ!\n➕ ဖမ်းလိုက်ရန် /gases [ နာမည် ]",
-        "🔱 A character has spawned in this chat!\n➕ Add to harem using /gases [ NAME ]"
-    )
+    caption = "🔱 A character has spawned in this chat!\n➕ Add to harem using /gases [ NAME ]"
     sent_msg = await bot1.send_message(chat_id, caption, file=stored_msg.media)
     active_spawns[chat_id] = {
         "char_id": chosen.get("char_id"),
@@ -232,7 +215,7 @@ async def trigger_dynamic_spawn(chat_id):
     }
 
 # ==========================================
-# HANDLERS (Functions, no decorators)
+# HANDLERS
 # ==========================================
 
 async def message_counter_for_spawn(event):
@@ -264,29 +247,29 @@ async def catch_handler(event):
     user_id = event.sender_id
     name = event.pattern_match.group(1)
     if not name or not name.strip():
-        await reply_tag(event, bl(
-            "❓ <b>အသုံးပြုပုံ:</b> <code>/gases [နာမည်]</code>\nဇာတ်ကောင်ပေါ်နေချိန်မှာ အမည်ရိုက်ပြီး ဖမ်းလိုက်ပါ။ လက်ရှိပေါ်နေတဲ့ ဇာတ်ကောင်ကို /w နဲ့ စစ်ဆေးနိုင်ပါတယ်။",
-            "❓ <b>Usage:</b> <code>/gases [name]</code>\nType the exact name while a character is spawned to catch it. Use /w to check who's currently spawned."
-        ), parse_mode='html')
+        await reply_tag(event,
+            "❓ <b>Usage:</b> <code>/gases [name]</code>\n"
+            "Type the exact name while a character is spawned to catch it. Use /w to check who's currently spawned.",
+            parse_mode='html')
         return
     name = name.strip()
     if chat_id not in active_spawns:
-        await reply_tag(event, bl("❌ ဒီချတ်ထဲမှာ ဇာတ်ကောင်မရှိသေးပါ။", "❌ No character has spawned in this chat."))
+        await reply_tag(event, "❌ No character has spawned in this chat.")
         return
     spawn_data = active_spawns[chat_id]
     if spawn_data["claimed"]:
-        await reply_tag(event, bl("❌ တခြားသူက ဖမ်းသွားပြီးပါပြီ!", "❌ Already caught by someone else!"))
+        await reply_tag(event, "❌ Already caught by someone else!")
         return
     if time.time() - spawn_data["spawn_time"] > 300:
         del active_spawns[chat_id]
-        await reply_tag(event, bl("⏱️ နောက်ကျသွားပါပြီ! ဇာတ်ကောင်ပျောက်သွားပါပြီ။", "⏱️ Too late! The character vanished."))
+        await reply_tag(event, "⏱️ Too late! The character vanished.")
         return
     if normalize_name(name) != normalize_name(spawn_data["name"]):
-        await reply_tag(event, bl("❌ နာမည်မှားနေပါတယ်! /w နဲ့ မှန်ကန်တဲ့ နာမည်ကို စစ်ဆေးပါ။", "❌ Wrong name! Use /w to check the exact name."))
+        await reply_tag(event, "❌ Wrong name! Use /w to check the exact name.")
         return
     async with spawn_locks[chat_id]:
         if active_spawns.get(chat_id, {}).get("claimed", True):
-            await reply_tag(event, bl("❌ တခြားသူက ဖမ်းသွားပြီးပါပြီ!", "❌ Already caught by someone else!"))
+            await reply_tag(event, "❌ Already caught by someone else!")
             return
         active_spawns[chat_id]["claimed"] = True
         mention = await get_mention(bot1, user_id)
@@ -310,9 +293,6 @@ async def catch_handler(event):
             },
             upsert=True
         )
-        # spawn_count now tracks real catches (see trigger_dynamic_spawn note above),
-        # so /check's spawn stats and each character's spawn_limit both reflect how
-        # many times it has actually been caught.
         await characters_base_col.update_one(
             {"char_id": spawn_data["char_id"]}, {"$inc": {"spawn_count": 1}}
         )
@@ -320,12 +300,12 @@ async def catch_handler(event):
         await add_balance(user_id, value)
         del active_spawns[chat_id]
         success_text = (
-            f"✨ {mention}, ဇာတ်ကောင်အသစ်ရပါပြီ! / you got a new character!\n\n"
-            f"🌟 Name / နာမည်: {spawn_data['name']}\n"
-            f"{RARITY_EMOJI.get(spawn_data['rarity'], '')} Rarity / အဆင့်: {spawn_data['rarity']}\n"
-            f"🔥 Anime / စီးရီး: {spawn_data['series']}\n"
+            f"✨ {mention}, you got a new character!\n\n"
+            f"🌟 Name: <code>{escape_html(spawn_data['name'])}</code>\n"
+            f"{RARITY_EMOJI.get(spawn_data['rarity'], '')} Rarity: {escape_html(spawn_data['rarity'])}\n"
+            f"🔥 Anime: {escape_html(spawn_data['series'])}\n"
             f"💰 +{value:,} MMK\n\n"
-            f"🖼 /harem ကို စစ်ဆေးလိုက်ပါ! / Check your /harem now!"
+            f"🖼 Check your /harem now!"
         )
         await reply_tag(event, success_text, parse_mode='html')
 
@@ -335,13 +315,16 @@ async def w_handler(event):
         return
     chat_id = event.chat_id
     if chat_id not in active_spawns:
-        await reply_tag(event, bl("❌ ဇာတ်ကောင်တစ်ကောင်မှ မပေါ်သေးပါ။", "❌ No character has spawned."))
+        await reply_tag(event, "❌ No character has spawned.")
         return
     data = active_spawns[chat_id]
+    escaped_name = escape_html(data['name'])
     await reply_tag(event,
-        f"🌟 Name / နာမည်: {data['name']}\n"
-        f"📺 Series / စီးရီး: {data['series']}\n"
-        f"💎 Rarity / အဆင့်: {RARITY_EMOJI.get(data['rarity'], '')} {data['rarity']}"
+        f"🌟 Name: <code>{escaped_name}</code>\n"
+        f"🍮 Series: {escape_html(data['series'])}\n"
+        f"💎 Rarity: {RARITY_EMOJI.get(data['rarity'], '')} {escape_html(data['rarity'])}\n\n"
+        f"📝 Catch: <code>/gases {escaped_name}</code>",
+        parse_mode='html'
     )
 
 # ---- /who (reply required) ----
@@ -350,24 +333,27 @@ async def who_reveal_handler(event):
         return
     chat_id = event.chat_id
     if chat_id not in active_spawns:
-        await reply_tag(event, bl("❌ ဒီချတ်ထဲမှာ ဇာတ်ကောင်မရှိသေးပါ။", "❌ No character has spawned in this chat."))
+        await reply_tag(event, "❌ No character has spawned in this chat.")
         return
     spawn_data = active_spawns[chat_id]
     if time.time() - spawn_data["spawn_time"] > 300:
         if chat_id in active_spawns:
             del active_spawns[chat_id]
-        await reply_tag(event, bl("⏱️ ဇာတ်ကောင်ပျောက်သွားပါပြီ! နောက်တစ်ကြိမ်ကြိုးစားပါ။", "⏱️ The character has vanished! Try again later."))
+        await reply_tag(event, "⏱️ The character has vanished! Try again later.")
         return
     if not event.is_reply:
-        await reply_tag(event, bl("⚠️ ကျေးဇူးပြု၍ spawn message ကို reply ပေးပါ!", "⚠️ Please reply directly to the spawn message to reveal the character name!"))
+        await reply_tag(event, "⚠️ Please reply directly to the spawn message to reveal the character name!")
         return
     if event.reply_to_msg_id != spawn_data["spawn_msg_id"]:
-        await reply_tag(event, bl("⚠️ spawn message ကိုသာ reply ပေးပါ၊ တခြားစာကို reply မလုပ်ပါနဲ့!", "⚠️ Please reply directly to the spawn message, not to other messages!"))
+        await reply_tag(event, "⚠️ Please reply directly to the spawn message, not to other messages!")
         return
+    escaped_name = escape_html(spawn_data['name'])
     await reply_tag(event,
-        f"🌟 Name: {spawn_data['name']}\n"
-        f"📺 Series: {spawn_data['series']}\n"
-        f"💎 Rarity: {RARITY_EMOJI.get(spawn_data['rarity'], '')} {spawn_data['rarity']}"
+        f"🌟 Name: <code>{escaped_name}</code>\n"
+        f"🍮 Series: {escape_html(spawn_data['series'])}\n"
+        f"💎 Rarity: {RARITY_EMOJI.get(spawn_data['rarity'], '')} {escape_html(spawn_data['rarity'])}\n\n"
+        f"📝 Catch: <code>/gases {escaped_name}</code>",
+        parse_mode='html'
     )
 
 # ---- /hmode ----
@@ -375,17 +361,20 @@ async def hmode_handler(event):
     user_id = event.sender_id
     doc = await users_catcher_col.find_one({"user_id": user_id})
     current_filter = doc.get("rarity_filter") if doc else None
+    harem = doc.get("harem", []) if doc else []
+    rarity_counts = Counter(c.get("rarity") for c in harem)
+
     buttons = []
     for tier in RARITY_TIERS:
-        label = f"✅ {tier['emoji']} {tier['name']}" if current_filter == tier['name'] else f"{tier['emoji']} {tier['name']}"
+        count = rarity_counts.get(tier['name'], 0)
+        label = f"{'✅ ' if current_filter == tier['name'] else ''}{tier['emoji']} {tier['name']} ({count})"
         buttons.append([Button.inline(label, data=f"hfilter_{tier['name']}_{user_id}")])
+
     clear_label = "🔓 Clear Filter" if current_filter else "🔒 No Filter"
     buttons.append([Button.inline(clear_label, data=f"hfilter_clear_{user_id}")])
-    await reply_tag(
-        event,
-        f"🎯 Select Rarity to prioritize in /harem\nCurrent: {current_filter if current_filter else 'None (Show All)'}",
-        buttons=buttons
-    )
+
+    caption = f"🎯 Select Rarity to prioritize in /harem\nCurrent: {current_filter if current_filter else 'None (Show All)'}"
+    await event.reply(caption, buttons=buttons)
 
 # ---- /harem ----
 async def harem_handler(event):
@@ -395,7 +384,6 @@ async def harem_handler(event):
     await send_harem_overview(event, user_id, page=1)
 
 async def build_harem_groups(harem, rarity_filter=None):
-    """Group a user's owned cards by series: [{series, owned, total, lines}, ...], A-Z by series."""
     counts = {}
     for c in harem:
         cid = c.get("char_id")
@@ -432,7 +420,6 @@ async def build_harem_groups(harem, rarity_filter=None):
     return groups
 
 def paginate_harem_groups(groups, budget=HAREM_PAGE_CHAR_BUDGET):
-    """Pack whole series-blocks onto pages without blowing past Telegram's caption limit."""
     pages, current, current_len = [], [], 0
     for g in groups:
         block = "\n".join([f"⚜️ <b>{escape_html(g['series'])}</b> ({g['owned']}/{g['total']})", HAREM_DIVIDER] + g["lines"])
@@ -451,13 +438,10 @@ async def send_harem_overview(event, user_id, page=1, edit_msg_id=None):
     doc = await users_catcher_col.find_one({"user_id": user_id})
     harem = doc.get("harem", []) if doc else []
     if not harem:
-        msg = bl(
-            "📭 သင့် harem ထဲမှာ ကဒ်တစ်ခုမှ မရှိသေးပါ။ /w နဲ့ ဇာတ်ကောင်စောင့်ပြီး /gases [နာမည်] နဲ့ ဖမ်းလိုက်ပါ။",
-            "📭 Your harem is empty. Watch for a spawn with /w and catch it with /gases [name]."
-        )
+        msg = "📭 Your harem is empty. Watch for a spawn with /w and catch it with /gases [name]."
         if edit_msg_id:
             try:
-                await bot1.edit_message(event.chat_id, edit_msg_id, msg + TAGLINE, buttons=None)
+                await bot1.edit_message(event.chat_id, edit_msg_id, msg, buttons=None)
             except Exception:
                 pass
         else:
@@ -472,7 +456,6 @@ async def send_harem_overview(event, user_id, page=1, edit_msg_id=None):
     if page > total_pages: page = total_pages
     body = pages[page - 1]
 
-    # Auto-assign a random favorite card if none is set yet (or it no longer exists)
     fav_id = doc.get("fav_card")
     fav_card = next((c for c in harem if c.get("char_id") == fav_id), None) if fav_id else None
     if not fav_card:
@@ -497,9 +480,9 @@ async def send_harem_overview(event, user_id, page=1, edit_msg_id=None):
     header = f"🎐 <b>{escape_html(owner_name)}</b>'s Collection\n"
     header += f"📄 Page {page}/{total_pages} · 🧩 Unique {unique_cards} · 🗂 Total {total_cards}\n"
     if rarity_filter:
-        header += f"🎯 Priority / ဦးစားပေး: {RARITY_EMOJI.get(rarity_filter, '')} {rarity_filter}\n"
+        header += f"🎯 Priority: {RARITY_EMOJI.get(rarity_filter, '')} {rarity_filter}\n"
     header += "\n"
-    footer = f"\n\n💰 Balance: {balance:,} MMK\n⭐ /fav [ID] — favorite ပြောင်းရန် 🎁 /gift [ID] — reply ပြီး ကဒ်လက်ဆောင်ပေးရန်"
+    footer = f"\n\n💰 Balance: {balance:,} MMK\n⭐ /fav [ID] — set favorite 🎁 /gift [ID] — gift a card (reply to recipient)"
     caption = header + body + footer
 
     nav_row = []
@@ -521,18 +504,17 @@ async def send_harem_overview(event, user_id, page=1, edit_msg_id=None):
             if media:
                 await bot1.edit_message(event.chat_id, edit_msg_id, caption, file=media, parse_mode='html', buttons=buttons)
             else:
-                await bot1.edit_message(event.chat_id, edit_msg_id, caption + TAGLINE, parse_mode='html', buttons=buttons)
+                await bot1.edit_message(event.chat_id, edit_msg_id, caption, parse_mode='html', buttons=buttons)
             return
         except Exception as e:
             logging.error(f"harem overview edit failed, sending fresh copy: {e}")
-            # fall through to send a brand-new message below
 
     if media:
-        await bot1.send_file(event.chat_id, media, caption=caption + TAGLINE, parse_mode='html', buttons=buttons)
+        await bot1.send_file(event.chat_id, media, caption=caption, parse_mode='html', buttons=buttons)
     else:
         await reply_tag(event, caption, parse_mode='html', buttons=buttons)
 
-# ---- Harem Gallery (one card at a time — view any user's cards, anyone can browse) ----
+# ---- Harem Gallery ----
 async def send_harem_gallery(event, owner_id, page, edit_msg_id):
     doc = await users_catcher_col.find_one({"user_id": owner_id})
     harem = doc.get("harem", []) if doc else []
@@ -556,9 +538,9 @@ async def send_harem_gallery(event, owner_id, page, edit_msg_id):
             pass
     caption = (
         f"🃏 {page}/{total}\n\n"
-        f"🌟 Name / နာမည်: {card.get('name')}\n"
-        f"📺 Series / စီးရီး: {card.get('series')}\n"
-        f"💎 Rarity / အဆင့်: {RARITY_EMOJI.get(card.get('rarity'), '')} {card.get('rarity')}\n"
+        f"🌟 Name: {card.get('name')}\n"
+        f"📺 Series: {card.get('series')}\n"
+        f"💎 Rarity: {RARITY_EMOJI.get(card.get('rarity'), '')} {card.get('rarity')}\n"
         f"🆔 ID: {card.get('char_id')}"
     )
     nav_row = []
@@ -569,34 +551,32 @@ async def send_harem_gallery(event, owner_id, page, edit_msg_id):
     buttons = []
     if nav_row:
         buttons.append(nav_row)
-    buttons.append([Button.inline("🔙 Back / နောက်သို့", data=f"hback_{owner_id}")])
+    buttons.append([Button.inline("🔙 Back", data=f"hback_{owner_id}")])
     try:
         if media:
-            await bot1.edit_message(event.chat_id, edit_msg_id, caption + TAGLINE, file=media, parse_mode='html', buttons=buttons)
+            await bot1.edit_message(event.chat_id, edit_msg_id, caption, file=media, parse_mode='html', buttons=buttons)
         else:
-            await bot1.edit_message(event.chat_id, edit_msg_id, caption + TAGLINE, parse_mode='html', buttons=buttons)
+            await bot1.edit_message(event.chat_id, edit_msg_id, caption, parse_mode='html', buttons=buttons)
     except Exception as e:
         logging.error(f"harem gallery edit failed: {e}")
 
-# ---- /fav (shows the card + Yes/No confirmation, only the requester can answer) ----
+# ---- /fav ----
 async def fav_handler(event):
     user_id = event.sender_id
     char_id = event.pattern_match.group(1)
     if not char_id or not char_id.strip():
-        await reply_tag(event, bl(
-            "❓ <b>အသုံးပြုပုံ:</b> <code>/fav [ID]</code>\nဥပမာ - <code>/fav 3946</code>\nသင့် harem ထဲက ကဒ် ID ကို ရိုက်ထည့်ပြီး favorite အဖြစ် သတ်မှတ်နိုင်ပါတယ်။ ID ကို /harem ထဲမှာ ကြည့်နိုင်ပါတယ်။",
-            "❓ <b>Usage:</b> <code>/fav [ID]</code>\nExample: <code>/fav 3946</code>\nSet a card from your own harem as your favorite. Find the ID in /harem."
-        ), parse_mode='html')
+        await reply_tag(event,
+            "❓ <b>Usage:</b> <code>/fav [ID]</code>\n"
+            "Example: <code>/fav 3946</code>\n"
+            "Set a card from your own harem as your favorite. Find the ID in /harem.",
+            parse_mode='html')
         return
     char_id = char_id.strip()
     doc = await users_catcher_col.find_one({"user_id": user_id})
     harem = doc.get("harem", []) if doc else []
     owned = next((c for c in harem if c.get("char_id") == char_id), None)
     if not owned:
-        await reply_tag(event, bl(
-            "❌ ဒီ ID ရဲ့ ကဒ်ကို သင့် harem ထဲမှာ မတွေ့ပါ။",
-            "❌ You don't own a card with that ID in your harem."
-        ))
+        await reply_tag(event, "❌ You don't own a card with that ID in your harem.")
         return
 
     char_data = await characters_base_col.find_one({"char_id": char_id})
@@ -609,59 +589,47 @@ async def fav_handler(event):
         except Exception:
             pass
 
-    prompt = bl(
-        f"⭐ ဒီကဒ်ကို favorite အဖြစ် သတ်မှတ်လိုပါသလား?\n\n"
-        f"⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})",
-        f"⭐ Do you want to set this character as your favourite?\n\n"
-        f"⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})"
-    )
+    prompt = f"⭐ Do you want to set this character as your favourite?\n\n⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})"
     buttons = [[Button.inline("✅ Yes", data=f"fyes_{char_id}_{user_id}"), Button.inline("❌ No", data=f"fno_{user_id}")]]
     if media:
         await bot1.send_file(event.chat_id, media, caption=prompt, parse_mode='html', buttons=buttons, reply_to=event.id)
     else:
         await event.reply(prompt, parse_mode='html', buttons=buttons)
 
-# ---- /gift (reply to the recipient; Yes/No confirmation, only the sender can answer) ----
+# ---- /gift ----
 async def gift_handler(event):
     if event.is_private:
         return
     user_id = event.sender_id
     char_id = event.pattern_match.group(1)
     if not char_id or not char_id.strip():
-        await reply_tag(event, bl(
-            "❓ <b>အသုံးပြုပုံ:</b> ကဒ်လက်ခံမည့်သူရဲ့ message ကို <b>reply</b> လုပ်ပြီး <code>/gift [ID]</code> ရိုက်ပါ။\nဥပမာ - user တစ်ယောက်ရဲ့ message ကို reply ပြီး <code>/gift 3946</code>",
-            "❓ <b>Usage:</b> <b>Reply</b> to the person you want to gift, then send <code>/gift [ID]</code>.\nExample: reply to their message with <code>/gift 3946</code>"
-        ), parse_mode='html')
+        await reply_tag(event,
+            "❓ <b>Usage:</b> Reply to the person you want to gift, then send <code>/gift [ID]</code>.\n"
+            "Example: reply to their message with <code>/gift 3946</code>",
+            parse_mode='html')
         return
     char_id = char_id.strip()
     if not event.is_reply:
-        await reply_tag(event, bl(
-            "⚠️ ကဒ်လက်ခံမည့်သူရဲ့ message ကို reply ပေးမှသာ gift လုပ်လို့ရပါမယ်။",
-            "⚠️ You need to reply to the recipient's message to gift a card to them."
-        ))
+        await reply_tag(event, "⚠️ You need to reply to the recipient's message to gift a card to them.")
         return
     reply_msg = await event.get_reply_message()
     receiver = await reply_msg.get_sender() if reply_msg else None
     if not receiver or getattr(receiver, "bot", False):
-        await reply_tag(event, bl("❌ ဒီ user ကို gift မလုပ်နိုင်ပါ။", "❌ You can't gift a card to that user."))
+        await reply_tag(event, "❌ You can't gift a card to that user.")
         return
     receiver_id = receiver.id
     if receiver_id == user_id:
-        await reply_tag(event, bl("❌ ကိုယ့်ကိုယ်ကို gift မလုပ်နိုင်ပါ။", "❌ You can't gift a card to yourself."))
+        await reply_tag(event, "❌ You can't gift a card to yourself.")
         return
 
     doc = await users_catcher_col.find_one({"user_id": user_id})
     harem = doc.get("harem", []) if doc else []
     owned = next((c for c in harem if c.get("char_id") == char_id), None)
     if not owned:
-        await reply_tag(event, bl(
-            "❌ ဒီ ID ရဲ့ ကဒ်ကို သင့် harem ထဲမှာ မတွေ့ပါ။",
-            "❌ You don't own a card with that ID in your harem."
-        ))
+        await reply_tag(event, "❌ You don't own a card with that ID in your harem.")
         return
 
-    receiver_name = f"{getattr(receiver, 'first_name', '') or ''} {getattr(receiver, 'last_name', '') or ''}".strip() or None
-    receiver_mention = await get_mention(bot1, receiver_id, name=receiver_name)
+    receiver_mention = await get_mention(bot1, receiver_id)
     char_data = await characters_base_col.find_one({"char_id": char_id})
     media = None
     if char_data and char_data.get("storage_msg_id"):
@@ -672,12 +640,7 @@ async def gift_handler(event):
         except Exception:
             pass
 
-    prompt = bl(
-        f"🎁 {receiver_mention} ကို ဒီကဒ်ကို လက်ဆောင်ပေးလိုက်ချင်ပါသလား?\n\n"
-        f"⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})",
-        f"🎁 Do you want to gift this character to {receiver_mention}?\n\n"
-        f"⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})"
-    )
+    prompt = f"🎁 Do you want to gift this character to {receiver_mention}?\n\n⤿ {escape_html(owned.get('name', 'Unknown'))} ({escape_html(owned.get('series', 'Unknown'))})"
     buttons = [[
         Button.inline("✅ Yes", data=f"gyes_{char_id}_{user_id}_{receiver_id}"),
         Button.inline("❌ No", data=f"gno_{user_id}")
@@ -686,7 +649,6 @@ async def gift_handler(event):
         await bot1.send_file(event.chat_id, media, caption=prompt, parse_mode='html', buttons=buttons, reply_to=event.id)
     else:
         await event.reply(prompt, parse_mode='html', buttons=buttons)
-
 
 # ---- Inline Query ----
 async def harem_inline(event):
@@ -778,18 +740,18 @@ async def myinfo_handler(event):
         if count:
             rarity_lines.append(f"├─➩ {RARITY_EMOJI[tier['name']]} {tier['name']}: {count}")
     text = (
-        f"🔰 User Info / အကောင့်အချက်အလက်\n\n"
-        f"👤 Name / နာမည်: {mention}\n"
+        f"🔰 User Info\n\n"
+        f"👤 Name: {mention}\n"
         f"🔩 User ID: {user_id}\n"
-        f"👒 Waifu Count / ကဒ်အရေအတွက်: {total}\n"
-        f"💰 Balance / လက်ကျန်ငွေ: {balance:,} MMK\n"
+        f"👒 Waifu Count: {total}\n"
+        f"💰 Balance: {balance:,} MMK\n"
     )
     if fav_name:
-        text += f"⭐ Favorite / အကြိုက်ဆုံး: {fav_name}\n"
-    text += "\n✳️ Rarity Counts / အဆင့်အလိုက်ရေတွက်: \n╭───────────────────\n" + "\n".join(rarity_lines) + "\n╰───────────────────"
+        text += f"⭐ Favorite: {fav_name}\n"
+    text += "\n✳️ Rarity Counts: \n╭───────────────────\n" + "\n".join(rarity_lines) + "\n╰───────────────────"
     photos = await bot1.get_profile_photos(user_id, limit=1)
     if photos:
-        await bot1.send_file(event.chat_id, photos[0], caption=text + TAGLINE, parse_mode='html')
+        await bot1.send_file(event.chat_id, photos[0], caption=text, parse_mode='html')
     else:
         await reply_tag(event, text)
 
@@ -797,15 +759,16 @@ async def myinfo_handler(event):
 async def check_handler(event):
     char_id = event.pattern_match.group(1)
     if not char_id or not char_id.strip():
-        await reply_tag(event, bl(
-            "❓ <b>အသုံးပြုပုံ:</b> <code>/check [ID]</code>\nဥပမာ - <code>/check 3946</code>\nကဒ်တစ်ခုရဲ့ rarity၊ ဖမ်းမိပြီးရေနဲ့ ထိပ်တန်းဖမ်းသူများကို ကြည့်နိုင်ပါတယ်။",
-            "❓ <b>Usage:</b> <code>/check [ID]</code>\nExample: <code>/check 3946</code>\nShows a card's rarity, catch stats, and its top catchers."
-        ), parse_mode='html')
+        await reply_tag(event,
+            "❓ <b>Usage:</b> <code>/check [ID]</code>\n"
+            "Example: <code>/check 3946</code>\n"
+            "Shows a card's rarity, catch stats, and its top catchers.",
+            parse_mode='html')
         return
     char_id = char_id.strip()
     char_doc = await characters_base_col.find_one({"char_id": char_id})
     if not char_doc:
-        await reply_tag(event, bl("❌ ဒီ ID နဲ့ ကဒ်ကို ရှာမတွေ့ပါ။", "❌ Character not found."))
+        await reply_tag(event, "❌ Character not found.")
         return
     media = None
     try:
@@ -820,10 +783,6 @@ async def check_handler(event):
     spawn_limit = char_doc.get("spawn_limit", 0)
     caught_line = f"{spawn_count}" if not spawn_limit else f"{spawn_count}/{spawn_limit} ({max(0, spawn_limit - spawn_count)} left)"
 
-    # NOTE: the $project stage below must explicitly include user_id — Mongo's
-    # aggregation $project drops every field that isn't listed (besides _id), so the
-    # original pipeline silently stripped user_id and o['user_id'] below would raise
-    # a KeyError the instant a character actually had an owner.
     pipeline = [
         {"$match": {"harem.char_id": char_id}},
         {"$project": {
@@ -836,12 +795,12 @@ async def check_handler(event):
     owners = await users_catcher_col.aggregate(pipeline).to_list(length=10)
 
     info = (
-        f"🃏 <b>Character Lookup / ကဒ်အချက်အလက်</b>\n\n"
+        f"🃏 <b>Character Lookup</b>\n\n"
         f"🆔 ID: <code>{escape_html(char_id)}</code>\n"
-        f"🌟 Name / နာမည်: <b>{escape_html(char_doc.get('name', 'Unknown'))}</b>\n"
-        f"📺 Series / စီးရီး: {escape_html(char_doc.get('series', 'Unknown'))}\n"
-        f"{RARITY_EMOJI.get(rarity, '')} Rarity / အဆင့်: {rarity}\n"
-        f"🎯 Caught so far / ဖမ်းမိပြီးရေ: {caught_line}\n"
+        f"🌟 Name: <b>{escape_html(char_doc.get('name', 'Unknown'))}</b>\n"
+        f"📺 Series: {escape_html(char_doc.get('series', 'Unknown'))}\n"
+        f"{RARITY_EMOJI.get(rarity, '')} Rarity: {rarity}\n"
+        f"🎯 Caught so far: {caught_line}\n"
     )
     events_note = char_doc.get("events")
     if events_note and str(events_note).lower() != "none":
@@ -849,16 +808,16 @@ async def check_handler(event):
 
     if owners:
         medals = ["🥇", "🥈", "🥉"]
-        info += f"\n🏆 <b>Top {len(owners)} Catchers / ထိပ်တန်းဖမ်းသူများ</b>\n"
+        info += f"\n🏆 <b>Top {len(owners)} Catchers</b>\n"
         for i, o in enumerate(owners, 1):
-            mention = await get_mention(bot1, o["user_id"], o.get("fullname"))
+            mention = await get_mention(bot1, o["user_id"])
             rank = medals[i - 1] if i <= 3 else f"{i}."
             info += f"{rank} {mention} — x{o['count']}\n"
     else:
-        info += bl("\n👻 ဒီကဒ်ကို ဘယ်သူမှ မဖမ်းရသေးပါ။", "\n👻 Nobody has caught this character yet.")
+        info += "\n👻 Nobody has caught this character yet."
 
     if media:
-        await bot1.send_file(event.chat_id, media, caption=info + TAGLINE, parse_mode='html')
+        await bot1.send_file(event.chat_id, media, caption=info, parse_mode='html')
     else:
         await reply_tag(event, info, parse_mode='html')
 
@@ -1057,7 +1016,7 @@ async def slot_handler(event):
     win = f"🎉 Win: +{payout:,} MMK" if payout > 0 else "😭 Lost!"
     final = f"🎰 [ {' | '.join(reels)} ]\nBet: {bet:,} MMK\n{win}\nBalance: {await get_balance(user_id):,} MMK"
     try:
-        await status_msg.edit(final + TAGLINE)
+        await status_msg.edit(final)
     except:
         await reply_tag(event, final)
 
@@ -1140,13 +1099,7 @@ async def start_handler(event):
     mention = await get_mention(bot1, user_id)
     await ensure_user_registered(user_id, mention)
     if event.is_private:
-        text = bl(
-            "👋 <b>မင်္ဂလာပါ!</b> Character Catcher Bot မှ ကြိုဆိုပါတယ်။\n\n"
-            "🎮 ဂရုပ်ထဲမှာ ဇာတ်ကောင်တွေ ပေါ်လာရင် /gases [နာမည်] နဲ့ ဖမ်းနိုင်ပါတယ်။\n"
-            "🎒 /harem — သင့်ကဒ်များကြည့်ရန်\n"
-            "🔰 /myinfo — သင့်ပရိုဖိုင်ကြည့်ရန်\n"
-            "💰 /balance, /daily — ငွေစာရင်းကြည့်ရန်\n"
-            "❓ /help — command အားလုံးကြည့်ရန်",
+        text = (
             "<b>Welcome to Character Catcher Bot!</b>\n\n"
             "🎮 Watch for characters spawning in your group and catch them with /gases [name].\n"
             "🎒 /harem — view your collected cards\n"
@@ -1157,25 +1110,22 @@ async def start_handler(event):
         try:
             me = await bot1.get_me()
             buttons = [
-                [Button.url("➕ Add me to a group / ဂရုပ်ထဲထည့်ရန်", f"https://t.me/{me.username}?startgroup=true")],
-                [Button.switch_inline("🔍 My Harem / ကဒ်များကြည့်ရန်", query=f"harem.{user_id}", same_peer=False)]
+                [Button.url("➕ Add me to a group", f"https://t.me/{me.username}?startgroup=true")],
+                [Button.switch_inline("🔍 My Harem", query=f"harem.{user_id}", same_peer=False)]
             ]
         except Exception:
             buttons = None
-        await event.reply(text + TAGLINE, parse_mode='html', buttons=buttons)
+        await event.reply(text, parse_mode='html', buttons=buttons)
     else:
-        await reply_tag(event, bl(
-            "👋 Bot အသင့်ပါ! /help ကို သုံးပြီး command များကြည့်ပါ။",
-            "👋 Bot is ready! Use /help to see available commands."
-        ))
+        await reply_tag(event, "👋 Bot is ready! Use /help to see available commands.")
 
 # ---- /help ----
 async def help_handler(event):
     help_text = (
-        "🤖 <b>Commands / လမ်းညွှန်</b>\n\n"
-        "🎮 <b>Catching / ဖမ်းခြင်း</b>\n/w, /gases [name], /harem, /myinfo, /fav [ID]\n/check [ID], /hmode (rarity priority)\n\n"
-        "💰 <b>Economy / ငွေကြေး</b>\n/balance, /daily, /slot [amount], /top, /gtop\n\n"
-        "🛠️ <b>Utility / အထောက်အကူ</b>\n/tr [text], /id, /start\n\n"
+        "🤖 <b>Commands</b>\n\n"
+        "🎮 <b>Catching</b>\n/w, /gases [name], /harem, /myinfo, /fav [ID]\n/check [ID], /hmode (rarity priority)\n\n"
+        "💰 <b>Economy</b>\n/balance, /daily, /slot [amount], /top, /gtop\n\n"
+        "🛠️ <b>Utility</b>\n/tr [text], /id, /start\n\n"
         "👑 <b>Owner</b>\n/addcharacter, /removecharacter, /editcharacter\n/fspawn, /spawnoff, /spawnstats, /changetime, /status"
     )
     await reply_tag(event, help_text, parse_mode='html')
@@ -1240,7 +1190,7 @@ async def callback_handler(event):
     if data.startswith("goto_hmode_"):
         target_user_id = int(data.split("_")[2])
         if user_id != target_user_id:
-            await event.answer(bl("⚠️ ဒါက သင့်ရဲ့ menu မဟုတ်ပါ။", "⚠️ This is not your menu."), alert=True)
+            await event.answer("⚠️ This is not your menu.", alert=True)
             return
         await event.answer("Opening Rarity Filter...")
         await hmode_handler(event)
@@ -1253,43 +1203,44 @@ async def callback_handler(event):
         else:
             rarity = parts[1]
             await users_catcher_col.update_one({"user_id": user_id}, {"$set": {"rarity_filter": rarity}}, upsert=True)
-            await event.answer(f"✅ Priority set to {rarity}", alert=True)
-        try:
-            await hmode_handler(event)
-        except:
-            pass
+            doc = await users_catcher_col.find_one({"user_id": user_id})
+            harem = doc.get("harem", []) if doc else []
+            count = sum(1 for c in harem if c.get("rarity") == rarity)
+            if count:
+                msg = f"✅ Filter set to {rarity}. You have {count} card{'s' if count > 1 else ''} of this rarity."
+            else:
+                msg = f"✅ Filter set to {rarity}. You have no cards of this rarity yet."
+            await event.answer(msg, alert=True)
+        await hmode_handler(event)
         return
     if data.startswith("fyes_"):
         body = data[len("fyes_"):]
         char_id, target_str = body.rsplit("_", 1)
         target_user_id = int(target_str)
         if user_id != target_user_id:
-            await event.answer(bl("⚠️ ဒါက သင့် request မဟုတ်ပါ။", "⚠️ This isn't your request."), alert=True)
+            await event.answer("⚠️ This isn't your request.", alert=True)
             return
         doc = await users_catcher_col.find_one({"user_id": user_id})
         harem = doc.get("harem", []) if doc else []
         owned = next((c for c in harem if c.get("char_id") == char_id), None)
         if not owned:
-            await event.answer(bl("❌ ဒီကဒ် သင့်ဆီမှာ မရှိတော့ပါ။", "❌ You no longer own this card."), alert=True)
+            await event.answer("❌ You no longer own this card.", alert=True)
             return
         await users_catcher_col.update_one({"user_id": user_id}, {"$set": {"fav_card": char_id}})
         await event.answer("⭐ Set!")
         try:
-            await event.edit(bl(
-                f"⭐ Favorite ကို {escape_html(owned.get('name', 'Unknown'))} အဖြစ် သတ်မှတ်ပြီးပါပြီ။",
-                f"⭐ Favorite set to {escape_html(owned.get('name', 'Unknown'))}."
-            ), parse_mode='html', buttons=None)
+            await event.edit(f"⭐ Favorite set to {escape_html(owned.get('name', 'Unknown'))}.", parse_mode='html', buttons=None)
         except Exception:
             pass
         return
     if data.startswith("fno_"):
         target_user_id = int(data.split("_", 1)[1])
         if user_id != target_user_id:
-            await event.answer(bl("⚠️ ဒါက သင့် request မဟုတ်ပါ။", "⚠️ This isn't your request."), alert=True)
+            await event.answer("⚠️ This isn't your request.", alert=True)
             return
         await event.answer("Cancelled")
         try:
-            await event.edit(bl("🚫 ပယ်ဖျက်လိုက်ပါပြီ။", "🚫 Cancelled."), parse_mode='html', buttons=None)
+            await event.edit("🚫 Cancelled.", parse_mode='html', buttons=None)
         except Exception:
             pass
         return
@@ -1298,13 +1249,13 @@ async def callback_handler(event):
         char_id, sender_str, receiver_str = body.rsplit("_", 2)
         sender_id, receiver_id = int(sender_str), int(receiver_str)
         if user_id != sender_id:
-            await event.answer(bl("⚠️ ဒါက သင့် request မဟုတ်ပါ။", "⚠️ This isn't your request."), alert=True)
+            await event.answer("⚠️ This isn't your request.", alert=True)
             return
         doc = await users_catcher_col.find_one({"user_id": sender_id})
         harem_list = doc.get("harem", []) if doc else []
         item = next((c for c in harem_list if c.get("char_id") == char_id), None)
         if not item:
-            await event.answer(bl("❌ ဒီကဒ် သင့်ဆီမှာ မရှိတော့ပါ။", "❌ You no longer have this card."), alert=True)
+            await event.answer("❌ You no longer have this card.", alert=True)
             return
         harem_list.remove(item)
         await users_catcher_col.update_one({"user_id": sender_id}, {"$set": {"harem": harem_list}})
@@ -1319,21 +1270,18 @@ async def callback_handler(event):
         )
         await event.answer("🎁 Gifted!")
         try:
-            await event.edit(bl(
-                f"🎁 {escape_html(item.get('name', 'Unknown'))} ကို {receiver_mention} ဆီ လက်ဆောင်ပေးလိုက်ပါပြီ။",
-                f"🎁 Gifted {escape_html(item.get('name', 'Unknown'))} to {receiver_mention}."
-            ), parse_mode='html', buttons=None)
+            await event.edit(f"🎁 Gifted {escape_html(item.get('name', 'Unknown'))} to {receiver_mention}.", parse_mode='html', buttons=None)
         except Exception:
             pass
         return
     if data.startswith("gno_"):
         sender_id = int(data.split("_", 1)[1])
         if user_id != sender_id:
-            await event.answer(bl("⚠️ ဒါက သင့် request မဟုတ်ပါ။", "⚠️ This isn't your request."), alert=True)
+            await event.answer("⚠️ This isn't your request.", alert=True)
             return
         await event.answer("Cancelled")
         try:
-            await event.edit(bl("🚫 Gift ကို ပယ်ဖျက်လိုက်ပါပြီ။", "🚫 Gift cancelled."), parse_mode='html', buttons=None)
+            await event.edit("🚫 Gift cancelled.", parse_mode='html', buttons=None)
         except Exception:
             pass
         return
@@ -1346,12 +1294,6 @@ async def startup():
     threading.Thread(target=_start_health_server, daemon=True).start()
     bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH)
     
-    # Register all handlers
-    # check_ban MUST be registered first: Telethon runs matching handlers in
-    # registration order, and only a StopPropagation raised by an earlier handler
-    # stops later ones. It used to be registered last (right before callback_handler),
-    # so every command handler had already replied before the ban check ever ran —
-    # banned users could use the bot freely and just got a bonus "you are banned" note.
     bot1.add_event_handler(check_ban, events.NewMessage(pattern=r'^/'))
     bot1.add_event_handler(message_counter_for_spawn, events.NewMessage(incoming=True))
     bot1.add_event_handler(start_handler, events.NewMessage(pattern=r'^/start(?:@\w+)?$'))
