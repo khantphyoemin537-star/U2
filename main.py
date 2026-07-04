@@ -201,7 +201,7 @@ async def trigger_dynamic_spawn(chat_id):
             return
     except:
         return
-    caption = "🔱 A character has spawned in this chat!\n➕ Add to harem using /gases [ NAME ]"
+    caption = "🦄 A character has spawned in this chat!\n🍟 Add to harem using /w,/who,/waifu and Copy /gases [ NAME ]"
     sent_msg = await bot1.send_message(chat_id, caption, file=stored_msg.media)
     active_spawns[chat_id] = {
         "char_id": chosen.get("char_id"),
@@ -264,7 +264,7 @@ async def catch_handler(event):
         await reply_tag(event, "⏱️ Too late! The character vanished.")
         return
     if normalize_name(name) != normalize_name(spawn_data["name"]):
-        await reply_tag(event, "❌ Wrong name! Reply to the spawn message with /w to see the exact name.")
+        await reply_tag(event, "❌ Wrong name! Reply to the spawn message with  to see the exact name.")
         return
 
     temp_msg = await event.reply("🔎 Checking...")
@@ -316,7 +316,7 @@ async def catch_handler(event):
             f"{RARITY_EMOJI.get(spawn_data['rarity'], '')} Rarity: {escape_html(spawn_data['rarity'])}\n"
             f"🔥 Anime: {escape_html(spawn_data['series'])}\n"
             f"💰 +{value:,} MMK\n\n"
-            f"🖼 Check your /harem now!"
+            f"❕ Check your /harem now!"
         )
         await reply_tag(event, success_text, parse_mode='html')
 
