@@ -1,3 +1,4 @@
+#Morgan py
 import os
 import asyncio
 import random
@@ -406,14 +407,14 @@ async def catch_handler(event):
         )
         await reply_tag(event, success_text, parse_mode='html')
 
-# ---- /w (handled by Main bot with fallback logic) ----
+# ---- /w (handled by Main bot with fallback logic & Reveal Bot) ----
 async def reveal_spawn_handler(event):
     if event.is_private:
         return
 
     chat_id = event.chat_id
 
-    # 1. Spawn ရှိမရှိ စစ်တယ်
+    # 1. Spawn ရှိမရှိ စစ်ဆေးမယ်
     if chat_id not in active_spawns:
         await reply_tag(event, "❌ No character has spawned in this chat.")
         return
@@ -421,7 +422,7 @@ async def reveal_spawn_handler(event):
     spawn_data = active_spawns[chat_id]
 
     # 2. အချိန်ကုန်သွားရင်
-    if time.time() - spawn_data["spawn_time"] > 300:
+    if time.time() - spawn_data["spawn_time"] > 400:
         if chat_id in active_spawns:
             del active_spawns[chat_id]
         await reply_tag(event, "⏱️ The character has vanished! Try again later.")
@@ -432,27 +433,58 @@ async def reveal_spawn_handler(event):
         await reply_tag(event, "⚠️ Reply directly to the spawn message to reveal the character!")
         return
 
-    # ---- ⭐ Core Logic: Reveal Bot ရှိမရှိ စစ်တယ် ----
-    reveal_bot_present = False
-    try:
-        reveal_entity = await event.client.get_entity(REVEAL_BOT_USERNAME)
-        await event.client(GetParticipantRequest(channel=chat_id, participant=reveal_entity))
-        reveal_bot_present = True
-    except Exception:
-        reveal_bot_present = False
+    # ---- ⭐ Core Logic: လက်ရှိ Event ကို ဘယ် Bot က ကိုင်တွယ်နေလဲ စစ်ဆေးမယ် ----
+    is_reveal_bot = (bot2 is not None and event.client == bot2)
 
-    # ✅ Reveal Bot ရှိနေရင် Main bot က ဘာမှမလုပ်ဘဲ တိတ်နေမယ်
-    if reveal_bot_present:
+    if is_reveal_bot:
+        # ✅ Reveal Bot ရဲ့ တာဝန်: Character ရဲ့ အချက်အလက်အမှန်တွေကို ထုတ်ပြပေးမယ်
+        rarity = spawn_data["rarity"]
+        rarity_emoji = RARITY_EMOJI.get(rarity, "⭐️")
+        reveal_text = (
+            f"🔍 **Character Revealed!**\n\n"
+            f"🌟 **Name:** `{spawn_data['name']}`\n"
+            f"⚜️ **Series:** {spawn_data['series']}\n"
+            f"{rarity_emoji} **Rarity:** {rarity}\n\n"
+            f"🍟 **Catch it with:** `/gases {spawn_data['name']}`"
+        )
+        await reply_tag(event, reveal_text, parse_mode='markdown')
         return
+    else:
+        # 🤖 Main Bot ရဲ့ တာဝန်: Reveal Bot ရှိမရှိပဲ စစ်ဆေးမယ်
+        reveal_bot_present = False
+        try:
+            # Reveal bot user entity ကို အရင်ရယူမယ်
+            reveal_entity = await event.client.get_entity(REVEAL_BOT_USERNAME)
+            
+            # Channel / Supergroup အတွက် စစ်ဆေးခြင်း
+            try:
+                await event.client(GetParticipantRequest(channel=chat_id, participant=reveal_entity))
+                reveal_bot_present = True
+            except UserNotParticipantError:
+                reveal_bot_present = False
+            except Exception:
+                # Normal Group သို့မဟုတ် Admin Permission မရှိခဲ့ရင် get_participants ဖြင့် အဖွဲ့ဝင်စာရင်းကို ထပ်မံစစ်ဆေးခြင်း
+                try:
+                    participants = await event.client.get_participants(chat_id, search=REVEAL_BOT_USERNAME)
+                    if participants:
+                        reveal_bot_present = True
+                except Exception:
+                    reveal_bot_present = False
+        except Exception as e:
+            logging.error(f"Error checking Reveal Bot presence: {e}")
+            reveal_bot_present = False
 
-    # ❌ Reveal Bot မရှိရင် Character အချက်အလက် ဘာမှမပြန်ဘူး။
-    # ဒီ Bot ကို ထည့်ဖို့ပဲ ပြောမယ်။
-    reply_text = (
-        f"⚠️ **@{REVEAL_BOT_USERNAME}** (Reveal Bot) က ဒီGroup Chatထဲမှာ မရှိပါဘူး။\n"
-        f"👉 Character ရဲ့ နာမည်၊ Series နဲ့ Rarity တွေကို သိချင်ရင် ကျေးဇူးပြုပြီး ဒီ Bot ကို အရင်ထည့်ပေးပါ။\n"
-        f"🔗 Bot Link: https://t.me/{REVEAL_BOT_USERNAME}"
-    )
-    await reply_tag(event, reply_text, parse_mode='html')
+        # ✅ Reveal Bot အုပ်စုထဲမှာ ရှိနေရင် Main bot က ဘာမှမလုပ်ဘဲ တိတ်နေပေးမယ် (Reveal Bot က ဖြေကြားပေးမှာဖြစ်လို့)
+        if reveal_bot_present:
+            return
+
+        # ❌ Reveal Bot အုပ်စုထဲမှာ မရှိရင် Main bot က သတိပေးစာ ပြန်လည်ပို့ပေးမယ်
+        reply_text = (
+            f"⚠️ **@{REVEAL_BOT_USERNAME}** (Reveal Bot) က ဒီ Group Chat ထဲမှာ မရှိပါဘူးခင်ဗျာ။\n\n"
+            f"👉 Character ရဲ့ နာမည်၊ Series နဲ့ Rarity တွေကို သိရှိလိုပါက ကျေးဇူးပြု၍ ဤ Bot အား Group ထဲသို့ အရင်ထည့်သွင်းပေးပါ။\n\n"
+            f"🔗 **Bot Link:** https://t.me/{REVEAL_BOT_USERNAME}"
+        )
+        await reply_tag(event, reply_text, parse_mode='markdown')
 
 # ---- /hmode ----
 async def hmode_handler(event):
@@ -1500,4 +1532,5 @@ async def startup():
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    asyncio.run(startup())
+    asyncio.run(startup()) 
+    
