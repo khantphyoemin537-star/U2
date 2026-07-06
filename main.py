@@ -1445,8 +1445,6 @@ async def startup():
     bot1.add_event_handler(on_bot_added, events.ChatAction)
     bot1.add_event_handler(catch_handler, events.NewMessage(pattern=r'^(?:/gases|/catch)(?:@\w+)?(?:\s+(.+))?$'))
     bot1.add_event_handler(reveal_spawn_handler, events.NewMessage(pattern=r'^/w(?:@\w+)?$'))
-    # /w is now handled by bot2, so we remove it from bot1
-    # bot1.add_event_handler(reveal_spawn_handler, ...)  # removed
     bot1.add_event_handler(hmode_handler, events.NewMessage(pattern=r'^/hmode(?:@\w+)?$'))
     bot1.add_event_handler(harem_handler, events.NewMessage(pattern=r'^/harem(?:@\w+)?(?:\s+(.*))?$'))
     bot1.add_event_handler(harem_inline, events.InlineQuery)
