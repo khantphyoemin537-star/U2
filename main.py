@@ -1329,13 +1329,20 @@ async def pre_check_handler(event):
     if event.sender_id == OWNER_ID:
         return
 
-    # 1. Ban Check (ဘယ် Command မဆို စစ်တယ်)
+    # 1. Ban Check (ဘယ် Bot မဆို စစ်မယ်)
     banned = await banned_users_col.find_one({"user_id": event.sender_id})
     if banned and banned.get("banned", False):
+        # Reveal bot ဖြစ်နေရင် စာမပြန်ဘဲ လုပ်ဆောင်ချက်ကိုပဲ ရပ်ပစ်မယ်
+        if bot2 is not None and event.client == bot2:
+            raise events.StopPropagation
         await reply_tag(event, "❌ You are banned.")
         raise events.StopPropagation
 
-    # 2. Force Join Check – သတ်မှတ်ထားတဲ့ Command အတွက်သာ စစ်ဆေးမယ်
+    # 🌟 [🚨 အဓိကပြင်ဆင်ချက်] Reveal Bot ဖြစ်နေရင် Force Join Check ကို လုံးဝမလုပ်ဘဲ ဒီတင်တင် တန်းပြန်လှည့်မယ် (Main Bot ပဲ လုပ်မယ်)
+    if bot2 is not None and event.client == bot2:
+        return
+
+    # 2. Force Join Check – Main Bot တစ်ခုတည်းအတွက်သာ အလုပ်လုပ်မည်
     text = event.text or ""
     if text.startswith('/'):
         cmd = text.split()[0].lower()
@@ -1345,15 +1352,12 @@ async def pre_check_handler(event):
         # 📌 ဒီ Command တွေကိုပဲ Required Group ဝင်ထားမှ သုံးလို့ရမယ်
         force_join_commands = ['/gases', '/catch', '/harem']
         if cmd not in force_join_commands:
-            # ကျန်တဲ့ Command တွေ (ဥပမာ /w, /balance, /myinfo, /help, /start, /check etc.)
-            # အကုန်လုံးကို ဘယ်သူမဆို လွတ်လပ်စွာ သုံးခွင့်ပြုမယ် (Force Join မစစ်တော့ဘူး)
             return
 
-    # Force Join စစ်ဆေးရမယ့် Command တွေအတွက် အောက်က Code က အလုပ်လုပ်မယ်
     if REQUIRED_GROUP_ID:
         try:
-            client_to_use = bot1 if bot1 and bot1.is_connected() else event.client
-            await client_to_use(GetParticipantRequest(channel=REQUIRED_GROUP_ID, participant=event.sender_id))
+            # Main Bot ကိုပဲ သုံးပြီး Group ရဲ့ အဖွဲ့ဝင် ဟုတ်မဟုတ် စစ်ဆေးမယ်
+            await bot1(GetParticipantRequest(channel=REQUIRED_GROUP_ID, participant=event.sender_id))
         except UserNotParticipantError:
             join_text = (
                 "👋 **မင်္ဂလာပါခင်ဗျာ!**\n\n"
@@ -1364,7 +1368,8 @@ async def pre_check_handler(event):
             await event.reply(join_text, buttons=buttons)
             raise events.StopPropagation
         except Exception as e:
-            logging.error(f"Force Join Check Error: {e}") 
+            logging.error(f"Force Join Check Error: {e}")
+
 
 # ---- Callback Query ----
 async def callback_handler(event):
