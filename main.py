@@ -1451,6 +1451,44 @@ async def unban_handler(event):
     else:
         await reply_tag(event, f"❌ User {uid} is not banned.")
 
+async def remove_all_characters_handler(event):
+    """Delete ALL characters from the database. Owner only. Irreversible."""
+    if not await is_owner(event.sender_id):
+        await reply_tag(event, "❌ Owner only.")
+        return
+
+    # Confirm with the user (optional but safe)
+    confirm_msg = await reply_tag(
+        event,
+        "⚠️ **WARNING:** This will delete ALL characters from the database.\n"
+        "This action is **IRREVERSIBLE**.\n"
+        "Type `/confirm_delete_all` within 30 seconds to proceed."
+    )
+
+    # Wait for a follow‑up command
+    try:
+        @bot1.on(events.NewMessage(pattern=r'^/confirm_delete_all$', chats=event.chat_id))
+        async def confirm_handler(confirm_event):
+            if confirm_event.sender_id != event.sender_id:
+                return
+            # Delete everything
+            result = await characters_base_col.delete_many({})
+            # Clear active spawns
+            active_spawns.clear()
+            # Optionally reset spawn counters (if you store them elsewhere)
+            # await groups_counters_col.update_many({}, {"$set": {"counter": 0}})
+
+            await reply_tag(
+                confirm_event,
+                f"✅ Removed {result.deleted_count} characters from the database.\n"
+                "Active spawns have been cleared. Bot is now fresh."
+            )
+            # Remove the confirm handler to avoid leaks
+            bot1.remove_event_handler(confirm_handler)
+    except Exception as e:
+        logging.error(f"Confirmation handler error: {e}")
+        await reply_tag(event, "❌ Confirmation failed. Please try again.")
+
 # ---- Global Pre-Check (Ban & Force Join) ----
 async def pre_check_handler(event):
     if await is_owner(event.sender_id):
@@ -1646,6 +1684,7 @@ async def startup():
     bot1.add_event_handler(gban_handler, events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)\s+(.+?)\s+(\S+)$'))  # new pattern
     bot1.add_event_handler(co_handler, events.NewMessage(pattern=r'^/co(?:@\w+)?\s+(\d+)$'))
     bot1.add_event_handler(unban_handler, events.NewMessage(pattern=r'^/unban(?:@\w+)?\s+(\d+)$'))
+    bot1.add_event_handler(remove_all_characters_handler, events.NewMessage(pattern=r'^/removeallcharacters(?:@\w+)?$'))
     bot1.add_event_handler(callback_handler, events.CallbackQuery)
 
     await bot1.start(bot_token=BOT_TOKEN)
