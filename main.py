@@ -29,12 +29,11 @@ MONGO_URI = os.getenv("MONGO_URI")
 APP_ID = int(os.getenv("APP_ID"))
 APP_HASH = os.getenv("APP_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-REVEAL_BOT_TOKEN = os.getenv("REVEAL_BOT_TOKEN")  # new token for /w bot
+REVEAL_BOT_TOKEN = os.getenv("REVEAL_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID"))
 SPECIFIC_GROUP = int(os.getenv("SPECIFIC_GROUP"))
 SPECIFIC_CONTROL_GROUP = int(os.getenv("SPECIFIC_CONTROL_GROUP", SPECIFIC_GROUP))
 
-# Force Join Configurations
 REQUIRED_GROUP_ID = int(os.getenv("REQUIRED_GROUP_ID", "0"))
 REQUIRED_GROUP_LINK = os.getenv("REQUIRED_GROUP_LINK", "https://t.me/your_group_link")
 
@@ -78,7 +77,8 @@ groups_col = db["active_groups"]
 groups_counters_col = db["groups_msg_counters"]
 spawn_disabled_col = db["spawn_disabled_chats"]
 banned_users_col = db["banned_users"]
-reveal_bot_groups_col = db["reveal_bot_groups"]  # tracks which chats the reveal bot is actually a member of
+reveal_bot_groups_col = db["reveal_bot_groups"]
+bot_owners_col = db["bot_owners"]  # New: stores owner IDs
 
 # ==========================================
 # Rarity System (7 Tiers)
@@ -111,14 +111,14 @@ def get_rarity_value(rarity_name):
 # ==========================================
 # Global Variables
 # ==========================================
-bot1 = None   # main bot
-bot2 = None   # reveal bot (for /w)
+bot1 = None
+bot2 = None
 active_spawns = {}
 spawn_locks = defaultdict(asyncio.Lock)
-reveal_warn_cooldown = {}  # chat_id -> last time we warned this chat that reveal bot is missing
+reveal_warn_cooldown = {}
 
 # ==========================================
-# Ban duration parsing (10min / 1d / 1m / 1y / permanent)
+# Ban duration parsing
 # ==========================================
 DURATION_UNITS = {
     "min": 60, "mins": 60, "minute": 60, "minutes": 60,
@@ -129,7 +129,6 @@ DURATION_UNITS = {
 }
 
 def parse_duration(text):
-    """Returns seconds (int), None for permanent, or 'INVALID' if unparseable."""
     if not text:
         return "INVALID"
     text = text.strip().lower()
@@ -208,6 +207,15 @@ async def add_balance(user_id, amount):
     await users_catcher_col.update_one({"user_id": user_id}, {"$inc": {"wallet_balance": amount}}, upsert=True)
 
 # ==========================================
+# Owner management
+# ==========================================
+async def is_owner(user_id: int) -> bool:
+    doc = await bot_owners_col.find_one({"_id": "owners"})
+    if not doc:
+        return False
+    return user_id in doc.get("ids", [])
+
+# ==========================================
 # Character Spawn System
 # ==========================================
 async def spawn_cleaner():
@@ -219,13 +227,8 @@ async def spawn_cleaner():
         await asyncio.sleep(60)
 
 async def trigger_dynamic_spawn(chat_id):
-    # Fast-path check before taking the lock (avoids lock contention on the common case)
     if chat_id in active_spawns:
         return
-    # 🔒 Only one spawn attempt per chat may run at a time. Without this lock, a burst of
-    # messages (e.g. all arriving at once right after the bot was muted/restricted and
-    # then unmuted) can push the per-chat counter past the target multiple times before
-    # any of those concurrent calls finishes, causing several characters to spawn at once.
     async with spawn_locks[chat_id]:
         if chat_id in active_spawns:
             return
@@ -262,8 +265,6 @@ async def trigger_dynamic_spawn(chat_id):
             return
         caption = "🦄 A character has spawned in this chat!\n🍟 Add to harem using /w and then /gases [ NAME ]"
         try:
-            # If the bot is muted/restricted/flood-waited in this chat, this raises instead
-            # of silently leaving a half-finished spawn state around.
             sent_msg = await bot1.send_message(chat_id, caption, file=stored_msg.media)
         except Exception as e:
             logging.error(f"Failed to send spawn message to {chat_id}: {e}")
@@ -293,8 +294,6 @@ async def message_counter_for_spawn(event):
         return
     config = await groups_config_col.find_one({"chat_id": chat_id})
     if not config:
-        # Fall back to the global default set via /changetime (no chat_id given),
-        # which was previously stored under chat_id "global" but never actually read here.
         config = await groups_config_col.find_one({"chat_id": "global"})
     target = config.get("spawn_target", 50) if config else 50
     counter_doc = await groups_counters_col.find_one_and_update(
@@ -326,7 +325,7 @@ async def on_bot_added(event):
                 {"chat_id": chat_id},
                 {"$set": {"title": chat_title, "timestamp": time.time()}}
             )
-            return  # already notified
+            return
 
         await groups_col.update_one(
             {"chat_id": chat_id},
@@ -465,14 +464,12 @@ async def catch_handler(event):
         )
         await reply_tag(event, success_text, parse_mode='html')
 
-# ---- /w (handled by Main bot with 5-second Wait-and-See logic & Reveal Bot) ----
+# ---- /w (handled by Main bot) ----
 async def reveal_spawn_handler(event):
     if event.is_private:
         return
 
     chat_id = event.chat_id
-
-    # 1. Spawn ရှိမရှိ အရင်စစ်မယ် (မရှိရင် Main Bot တစ်ခုတည်းကပဲ စာပြန်ဖို့ Reveal Bot ကို Ignore လုပ်ထားမယ်)
     if chat_id not in active_spawns:
         if bot2 is not None and event.client == bot2:
             return
@@ -480,8 +477,6 @@ async def reveal_spawn_handler(event):
         return
 
     spawn_data = active_spawns[chat_id]
-
-    # 2. သက်တမ်းကုန်ဆုံးမှု စစ်ဆေးခြင်း
     if time.time() - spawn_data["spawn_time"] > 400:
         if bot2 is not None and event.client == bot2:
             return
@@ -490,7 +485,6 @@ async def reveal_spawn_handler(event):
         await reply_tag(event, "⏱️ The character has vanished! Try again later.")
         return
 
-    # 3. Reply ထောက်ထားခြင်း ဟုတ်မဟုတ် စစ်ဆေးခြင်း
     if not event.is_reply:
         if bot2 is not None and event.client == bot2:
             return
@@ -512,11 +506,9 @@ async def reveal_spawn_handler(event):
             await reply_tag(event, "⚠️ Reply directly to the spawn message to reveal the character!")
             return
 
-    # ---- ⚙️ Core Operational Logic ----
     is_reveal_bot = (bot2 is not None and event.client == bot2)
 
     if is_reveal_bot:
-        # 🤖 Reveal Bot (ID: 8575371720) - စာကို ချက်ချင်း အချိန်မဆိုင်းဘဲ ပို့ပေးမယ်
         rarity = spawn_data["rarity"]
         rarity_emoji = RARITY_EMOJI.get(rarity, "⭐️")
         reveal_text = (
@@ -529,19 +521,10 @@ async def reveal_spawn_handler(event):
         await reply_tag(event, reveal_text, parse_mode='markdown')
         return
 
-    # 🤖 Main Bot — deterministic check, no more sleep-based race.
-    # Previously this waited 7s and only warned if a "revealed" flag hadn't been set
-    # by the reveal bot in time — so even when the reveal bot WAS in the group, a slow
-    # reply (network latency, cold start, etc.) made the main bot fire a false warning
-    # on top of the real reveal, which looked like spam. Now we check actual tracked
-    # group membership instead of racing against a timer.
     reveal_bot_present = await reveal_bot_groups_col.find_one({"chat_id": chat_id})
     if reveal_bot_present:
-        # Reveal bot is confirmed to be in this chat — it will answer, main bot stays silent.
         return
 
-    # Reveal bot genuinely isn't in this group. Warn, but at most once every 10 minutes
-    # per chat so repeated /w usage without the reveal bot doesn't spam the group.
     last_warned = reveal_warn_cooldown.get(chat_id, 0)
     if time.time() - last_warned < 600:
         return
@@ -554,9 +537,6 @@ async def reveal_spawn_handler(event):
     await reply_tag(event, reply_text, parse_mode='markdown')
 
 async def on_reveal_bot_membership_change(event):
-    """Keeps reveal_bot_groups_col in sync with the reveal bot's real group membership,
-    so the main bot can deterministically know whether it's present in a chat instead
-    of guessing from response timing."""
     if not event.is_group or bot2 is None:
         return
 
@@ -1051,7 +1031,7 @@ async def check_handler(event):
 
 # ---- /addcharacter ----
 async def addcharacter_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     if not event.is_reply:
@@ -1104,7 +1084,7 @@ async def addcharacter_handler(event):
 
 # ---- /removecharacter ----
 async def removecharacter_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     char_id = event.pattern_match.group(1).strip()
@@ -1113,7 +1093,7 @@ async def removecharacter_handler(event):
 
 # ---- /fspawn ----
 async def force_spawn(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     chat_id = event.pattern_match.group(1)
@@ -1123,7 +1103,7 @@ async def force_spawn(event):
 
 # ---- /spawnoff ----
 async def spawn_toggle(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     chat_id = int(event.pattern_match.group(1))
@@ -1138,7 +1118,7 @@ async def spawn_toggle(event):
 
 # ---- /spawnstats ----
 async def spawn_stats(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     chat_id = event.pattern_match.group(1)
@@ -1153,7 +1133,7 @@ async def spawn_stats(event):
 
 # ---- /changetime ----
 async def changetime_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     args = event.pattern_match.groups()
@@ -1169,7 +1149,7 @@ async def changetime_handler(event):
 
 # ---- /status ----
 async def status_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
 
@@ -1379,125 +1359,65 @@ async def help_handler(event):
         "👑 <b>Owner</b>\n"
         "/addcharacter (reply to media), /removecharacter [ID]\n"
         "/fspawn, /spawnoff, /spawnstats, /changetime, /status\n"
-        "/gban [user_id] (asks for reason & duration), /unban [user_id]"
+        "/gban [user_id] [reason] [duration] — e.g. /gban 123 spam 1d\n"
+        "/co [user_id] — grant co-owner rights\n"
+        "/unban [user_id]"
     )
     await reply_tag(event, help_text, parse_mode='html')
 
-# ---- /gban helpers: interactive reason + duration prompts ----
-async def _await_owner_reply_text(client, chat_id, timeout=120):
-    """Waits for the next text message the owner sends in this chat and returns it."""
-    fut = asyncio.get_event_loop().create_future()
-
-    async def handler(e):
-        if not fut.done():
-            fut.set_result((e.text or "").strip())
-
-    client.add_event_handler(handler, events.NewMessage(from_users=OWNER_ID, chats=chat_id))
-    try:
-        return await asyncio.wait_for(fut, timeout=timeout)
-    except asyncio.TimeoutError:
-        return None
-    finally:
-        client.remove_event_handler(handler)
-
-
-async def _ask_ban_duration(client, chat_id, timeout=120):
-    """Shows preset duration buttons (10min/1d/1m/1y/Permanent) and also accepts a typed
-    custom duration from the owner. Returns (seconds_or_None, timed_out)."""
-    buttons = [
-        [Button.inline("⏱ 10 min", b"gbandur_600"), Button.inline("📅 1 day", b"gbandur_86400")],
-        [Button.inline("🗓 1 month", b"gbandur_2592000"), Button.inline("📆 1 year", b"gbandur_31536000")],
-        [Button.inline("♾️ Permanent", b"gbandur_0")]
-    ]
-    await client.send_message(
-        chat_id,
-        "⏰ **How long should this ban last?**\n"
-        "Tap a button below, or type a custom duration — e.g. `10min`, `1d`, `1m`, `1y`.",
-        buttons=buttons,
-        parse_mode='markdown'
-    )
-
-    fut = asyncio.get_event_loop().create_future()
-
-    async def msg_handler(e):
-        if fut.done():
-            return
-        parsed = parse_duration(e.text)
-        if parsed == "INVALID":
-            await e.reply("❌ Invalid format. Try again — e.g. `10min`, `1d`, `1m`, `1y`.", parse_mode='markdown')
-            return
-        fut.set_result(parsed)
-
-    async def cb_handler(e):
-        if fut.done():
-            return
-        data = e.data.decode()
-        if not data.startswith("gbandur_"):
-            return
-        val = int(data.split("_", 1)[1])
-        await e.answer("Selected ✅")
-        fut.set_result(val if val > 0 else None)
-
-    client.add_event_handler(msg_handler, events.NewMessage(from_users=OWNER_ID, chats=chat_id))
-    client.add_event_handler(cb_handler, events.CallbackQuery(from_users=OWNER_ID))
-    try:
-        result = await asyncio.wait_for(fut, timeout=timeout)
-        return result, False
-    except asyncio.TimeoutError:
-        return None, True
-    finally:
-        client.remove_event_handler(msg_handler)
-        client.remove_event_handler(cb_handler)
-
-
-# ---- /gban ----
+# ---- /gban (new simplified version) ----
+@bot1.on(events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)\s+(.+?)\s+(\S+)$'))
 async def gban_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
-
-    uid = int(event.pattern_match.group(1))
-    reason = event.pattern_match.group(2)
-    reason = reason.strip() if reason else None
-    chat_id = event.chat_id
-
-    if not reason:
-        await reply_tag(event, "📝 Reply to me with the ban reason.")
-        reason = await _await_owner_reply_text(event.client, chat_id)
-        if reason is None:
-            await reply_tag(event, "⌛ Timed out waiting for a reason. Ban cancelled.")
-            return
-        if not reason:
-            reason = "No reason provided"
-
-    duration_seconds, timed_out = await _ask_ban_duration(event.client, chat_id)
-    if timed_out:
-        await reply_tag(event, "⌛ Timed out waiting for a duration. Ban cancelled.")
+    user_id = int(event.pattern_match.group(1))
+    reason = event.pattern_match.group(2).strip()
+    duration_str = event.pattern_match.group(3).strip()
+    duration_seconds = parse_duration(duration_str)
+    if duration_seconds == "INVALID":
+        await reply_tag(event, f"❌ Invalid duration format. Use e.g. 10min, 1d, 1m, 1y, perm")
         return
-
     banned_until = (time.time() + duration_seconds) if duration_seconds else None
     await banned_users_col.update_one(
-        {"user_id": uid},
+        {"user_id": user_id},
         {"$set": {
             "banned": True,
             "reason": reason,
             "banned_at": time.time(),
             "banned_until": banned_until,
-            "banned_by": OWNER_ID
+            "banned_by": event.sender_id
         }},
         upsert=True
     )
     await reply_tag(
         event,
-        f"✅ User <code>{uid}</code> banned.\n"
+        f"✅ User <code>{user_id}</code> banned.\n"
         f"📄 Reason: {escape_html(reason)}\n"
         f"⏰ Duration: {format_duration(duration_seconds)}",
         parse_mode='html'
     )
 
+# ---- /co (add co-owner) ----
+@bot1.on(events.NewMessage(pattern=r'^/co(?:@\w+)?\s+(\d+)$'))
+async def co_handler(event):
+    if not await is_owner(event.sender_id):
+        await reply_tag(event, "❌ Owner only.")
+        return
+    new_owner_id = int(event.pattern_match.group(1))
+    if new_owner_id == event.sender_id:
+        await reply_tag(event, "❌ You are already an owner.")
+        return
+    await bot_owners_col.update_one(
+        {"_id": "owners"},
+        {"$addToSet": {"ids": new_owner_id}},
+        upsert=True
+    )
+    await reply_tag(event, f"✅ User <code>{new_owner_id}</code> is now a co-owner.", parse_mode='html')
+
 # ---- /unban ----
 async def unban_handler(event):
-    if event.sender_id != OWNER_ID:
+    if not await is_owner(event.sender_id):
         await reply_tag(event, "❌ Owner only.")
         return
     uid = int(event.pattern_match.group(1))
@@ -1509,18 +1429,16 @@ async def unban_handler(event):
 
 # ---- Global Pre-Check (Ban & Force Join) ----
 async def pre_check_handler(event):
-    if event.sender_id == OWNER_ID:
+    if await is_owner(event.sender_id):
         return
 
-    # 1. Ban Check (ဘယ် Bot မဆို စစ်မယ်) — now expiry-aware
+    # 1. Ban Check
     banned = await banned_users_col.find_one({"user_id": event.sender_id})
     if banned and banned.get("banned", False):
         banned_until = banned.get("banned_until")
         if banned_until and time.time() > banned_until:
-            # Ban has expired — lift it automatically and let the message through.
             await banned_users_col.update_one({"user_id": event.sender_id}, {"$set": {"banned": False}})
         else:
-            # Reveal bot ဖြစ်နေရင် စာမပြန်ဘဲ လုပ်ဆောင်ချက်ကိုပဲ ရပ်ပစ်မယ်
             if bot2 is not None and event.client == bot2:
                 raise events.StopPropagation
             reason = banned.get("reason", "No reason provided")
@@ -1532,25 +1450,21 @@ async def pre_check_handler(event):
             await reply_tag(event, f"❌ You are banned.\n📄 Reason: {reason}{expiry_note}")
             raise events.StopPropagation
 
-    # 🌟 [🚨 အဓိကပြင်ဆင်ချက်] Reveal Bot ဖြစ်နေရင် Force Join Check ကို လုံးဝမလုပ်ဘဲ ဒီတင်တင် တန်းပြန်လှည့်မယ် (Main Bot ပဲ လုပ်မယ်)
     if bot2 is not None and event.client == bot2:
         return
 
-    # 2. Force Join Check – Main Bot တစ်ခုတည်းအတွက်သာ အလုပ်လုပ်မည်
+    # 2. Force Join Check – Main Bot only
     text = event.text or ""
     if text.startswith('/'):
         cmd = text.split()[0].lower()
         if '@' in cmd:
             cmd = cmd.split('@')[0]
-        
-        # 📌 ဒီ Command တွေကိုပဲ Required Group ဝင်ထားမှ သုံးလို့ရမယ်
         force_join_commands = ['/gases', '/catch', '/harem']
         if cmd not in force_join_commands:
             return
 
     if REQUIRED_GROUP_ID:
         try:
-            # Main Bot ကိုပဲ သုံးပြီး Group ရဲ့ အဖွဲ့ဝင် ဟုတ်မဟုတ် စစ်ဆေးမယ်
             await bot1(GetParticipantRequest(channel=REQUIRED_GROUP_ID, participant=event.sender_id))
         except UserNotParticipantError:
             join_text = (
@@ -1563,7 +1477,6 @@ async def pre_check_handler(event):
             raise events.StopPropagation
         except Exception as e:
             logging.error(f"Force Join Check Error: {e}")
-
 
 # ---- Callback Query ----
 async def callback_handler(event):
@@ -1706,13 +1619,21 @@ async def startup():
     bot1.add_event_handler(auto_calc, events.NewMessage)
     bot1.add_event_handler(id_handler, events.NewMessage(pattern=r'^/id(?:@\w+)?$'))
     bot1.add_event_handler(help_handler, events.NewMessage(pattern=r'^/help(?:@\w+)?$'))
-    bot1.add_event_handler(gban_handler, events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)(?:\s+(.*))?$'))
+    bot1.add_event_handler(gban_handler, events.NewMessage(pattern=r'^/gban(?:@\w+)?\s+(\d+)\s+(.+?)\s+(\S+)$'))  # new pattern
+    bot1.add_event_handler(co_handler, events.NewMessage(pattern=r'^/co(?:@\w+)?\s+(\d+)$'))
     bot1.add_event_handler(unban_handler, events.NewMessage(pattern=r'^/unban(?:@\w+)?\s+(\d+)$'))
     bot1.add_event_handler(callback_handler, events.CallbackQuery)
 
     await bot1.start(bot_token=BOT_TOKEN)
 
-    # Reveal bot (only handles /w)
+    # Ensure OWNER_ID is in owners list
+    await bot_owners_col.update_one(
+        {"_id": "owners"},
+        {"$addToSet": {"ids": OWNER_ID}},
+        upsert=True
+    )
+
+    # Reveal bot
     if REVEAL_BOT_TOKEN:
         bot2 = TelegramClient('bot_reveal_session', APP_ID, APP_HASH)
         bot2.add_event_handler(pre_check_handler, events.NewMessage(pattern=r'^/'))
@@ -1720,8 +1641,7 @@ async def startup():
         bot2.add_event_handler(on_reveal_bot_membership_change, events.ChatAction)
         await bot2.start(bot_token=REVEAL_BOT_TOKEN)
 
-        # Seed reveal_bot_groups_col with groups the reveal bot is ALREADY in, since the
-        # ChatAction handler above only sees future joins/leaves, not past ones.
+        # Seed reveal_bot_groups_col
         try:
             current_group_ids = []
             async for dialog in bot2.iter_dialogs():
@@ -1753,7 +1673,6 @@ async def startup():
     asyncio.create_task(spawn_cleaner())
 
     print("Main bot is running.")
-    # Run both bots concurrently
     tasks = [bot1.run_until_disconnected()]
     if bot2:
         tasks.append(bot2.run_until_disconnected())
