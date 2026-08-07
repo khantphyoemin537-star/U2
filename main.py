@@ -7,11 +7,12 @@ import time
 import logging
 import re
 import threading
+import pytz
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from html import escape as escape_html
-
 import aiohttp
 from bson import json_util
 from dotenv import load_dotenv
@@ -209,6 +210,51 @@ async def add_balance(user_id, amount):
 
 async def is_owner(user_id):
     return user_id == OWNER_ID
+
+TZ = pytz.timezone('Asia/Yangon')
+
+async def send_daily_report():
+    # Get yesterday's stats
+    now = datetime.now(TZ)
+    yesterday_start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    pipeline = [
+        {"$unwind": "$harem"},
+        {"$match": {"harem.caught_date": {"$gte": yesterday_start, "$lt": today_start}}},
+        {"$facet": {
+            "totals": [{"$group": {"_id": None, "total": {"$sum": 1}, "catchers": {"$addToSet": "$user_id"}, "groups": {"$addToSet": "$harem.chat_id"}}}],
+            "rarity": [{"$group": {"_id": "$harem.rarity", "count": {"$sum": 1}}}]
+        }}
+    ]
+    result = await users_catcher_col.aggregate(pipeline).to_list(length=1)
+    doc = result[0] if result else {"totals": [], "rarity": []}
+    totals = doc["totals"][0] if doc["totals"] else {"total": 0, "catchers": [], "groups": []}
+    rarity = {r["_id"]: r["count"] for r in doc["rarity"]}
+
+    text = f"📊 **Daily Report – {yesterday_start_date}**\n"
+    text += f"🐇 Total Catches: {totals['total']}\n"
+    text += f"👥 Unique Catchers: {len(totals['catchers'])}\n"
+    text += f"🪐 Groups Active: {len(totals['groups'])}\n\n"
+    text += "**Rarity Breakdown:**\n"
+    for tier in RARITY_TIERS:
+        count = rarity.get(tier["name"], 0)
+        if count:
+            text += f"{RARITY_EMOJI[tier['name']]} {tier['name']}: {count}\n"
+    # Send to owner
+    try:
+        await bot.send_message(OWNER_ID, text, parse_mode='markdown')
+    except:
+        pass
+
+async def daily_report_scheduler():
+    while True:
+        now = datetime.now(TZ)
+        target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).seconds)
+        await send_daily_report()
 
 # ==========================================
 # Batch writing for spawn counters
@@ -931,55 +977,67 @@ async def gift_handler(event):
 # ==========================================
 @bot.on(events.NewMessage(pattern=own_pattern(r'^/profile(?:@\w+)?$')))
 async def profile_handler(event):
-    user_id = event.sender_id
-    mention = await get_mention(event.client, user_id)
-    await ensure_user_registered(user_id, mention)
-    doc = await users_catcher_col.find_one({"user_id": user_id})
-    if not doc:
-        await reply_tag(event, "❌ User not found.")
-        return
+    try:
+        if event.is_private:
+            # DM မှာလည်း အလုပ်လုပ်အောင်
+            pass
+        user_id = event.sender_id
+        mention = await get_mention(event.client, user_id)
+        await ensure_user_registered(user_id, mention)
+        doc = await users_catcher_col.find_one({"user_id": user_id})
+        if not doc:
+            await reply_tag(event, "❌ User not found.")
+            return
 
-    total = doc.get("total_caught", 0)
-    balance = doc.get("wallet_balance", 0)
-    daily = doc.get("daily_catches", 0)
-    gifted = doc.get("total_gifted", 0)
-    received = doc.get("total_received", 0)
-    r_counts = doc.get("rarity_counts", {t["name"]: 0 for t in RARITY_TIERS})
-    fav = doc.get("fav_card")
-    fav_name = None
-    if fav:
-        fav_doc = await characters_base_col.find_one({"char_id": fav})
-        if fav_doc:
-            fav_name = fav_doc["name"]
+        total = doc.get("total_caught", 0)
+        balance = doc.get("wallet_balance", 0)
+        daily = doc.get("daily_catches", 0)
+        gifted = doc.get("total_gifted", 0)
+        received = doc.get("total_received", 0)
+        r_counts = doc.get("rarity_counts", {t["name"]: 0 for t in RARITY_TIERS})
+        fav = doc.get("fav_card")
+        fav_name = None
+        if fav:
+            fav_doc = await characters_base_col.find_one({"char_id": fav})
+            if fav_doc:
+                fav_name = fav_doc["name"]
 
-    # Global rank (by total_caught)
-    rank = await users_catcher_col.count_documents({"total_caught": {"$gt": total}}) + 1
+        # Global rank
+        rank = await users_catcher_col.count_documents({"total_caught": {"$gt": total}}) + 1
 
-    rarity_lines = []
-    for tier in RARITY_TIERS:
-        count = r_counts.get(tier["name"], 0)
-        if count:
-            rarity_lines.append(f"├─➩ {RARITY_EMOJI[tier['name']]} {tier['name']}: {count}")
+        rarity_lines = []
+        for tier in RARITY_TIERS:
+            count = r_counts.get(tier["name"], 0)
+            if count:
+                rarity_lines.append(f"├─➩ {RARITY_EMOJI[tier['name']]} {tier['name']}: {count}")
 
-    text = (
-        f"👤 **{mention}**\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏆 **Global Rank:** #{rank}\n"
-        f"🎒 **Total Caught:** {total}\n"
-        f"📅 **Today's Catches:** {daily}/{DAILY_CATCH_LIMIT}\n"
-        f"💰 **Balance:** {balance:,} MMK\n"
-        f"🎁 **Gifted:** {gifted}  |  📥 **Received:** {received}\n"
-        f"⭐ **Favorite Card:** {fav_name if fav_name else 'None'}\n\n"
-        f"**Rarity Breakdown:**\n" + "\n".join(rarity_lines) + "\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Use /harem to view your collection.</i>"
-    )
-    # Try to send with profile photo
-    photos = await event.client.get_profile_photos(user_id, limit=1)
-    if photos:
-        await event.client.send_file(event.chat_id, photos[0], caption=text, parse_mode='markdown')
-    else:
-        await reply_tag(event, text, parse_mode='markdown')
+        text = (
+            f"👤 **{mention}**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏆 **Global Rank:** #{rank}\n"
+            f"🎒 **Total Caught:** {total}\n"
+            f"📅 **Today's Catches:** {daily}/{DAILY_CATCH_LIMIT}\n"
+            f"💰 **Balance:** {balance:,} MMK\n"
+            f"🎁 **Gifted:** {gifted}  |  📥 **Received:** {received}\n"
+            f"⭐ **Favorite Card:** {fav_name if fav_name else 'None'}\n\n"
+            "**Rarity Breakdown:**\n" + "\n".join(rarity_lines) + "\n━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>Use /harem to view your collection.</i>"
+        )
 
+        # Try to send with profile photo
+        try:
+            photos = await event.client.get_profile_photos(user_id, limit=1)
+            if photos:
+                await event.client.send_file(event.chat_id, photos[0], caption=text, parse_mode='markdown')
+            else:
+                await reply_tag(event, text, parse_mode='markdown')
+        except Exception as e:
+            # Profile photo can't be fetched, send text only
+            await reply_tag(event, text, parse_mode='markdown')
+    except Exception as e:
+        logging.error(f"Profile error: {e}")
+        await reply_tag(event, "❌ Profile loading error. Please try again later.", parse_mode='markdown')
+        
 # ==========================================
 # /top – local top 10
 # ==========================================
@@ -1064,23 +1122,85 @@ async def stats_handler(event):
 
 # ==========================================
 # /mau – monthly active users
-# ==========================================
 @bot.on(events.NewMessage(pattern=own_pattern(r'^/mau(?:@\w+)?$')))
 async def mau_handler(event):
-    if not await is_owner(event.sender_id):
-        await reply_tag(event, "❌ Owner only.")
+    try:
+        if not await is_owner(event.sender_id):
+            await reply_tag(event, "❌ Owner only.", parse_mode='markdown')
+            return
+        total_users = await users_catcher_col.count_documents({})
+        active_24h = await users_catcher_col.count_documents({"last_catch_date": {"$gte": time.time() - 86400}})
+        total_groups = await groups_col.count_documents({})
+        text = (
+            "📊 **MAU Stats**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"👥 **Total Users:** {total_users}\n"
+            f"🔥 **Active (24h):** {active_24h}\n"
+            f"🪐 **Active Groups:** {total_groups}"
+        )
+        await reply_tag(event, text, parse_mode='markdown')
+    except Exception as e:
+        logging.error(f"MAU error: {e}")
+        await reply_tag(event, "❌ MAU stats error. Please try again later.", parse_mode='markdown')
+@bot.on(events.NewMessage(pattern=own_pattern(r'^[/.]send(?:@\w+)?(?:\s+(.*))?$')))
+async def broadcast_command(event):
+    if event.sender_id != OWNER_ID:
+        await reply_tag(event, "❌ Owner only.", parse_mode='html')
         return
-    total_users = await users_catcher_col.count_documents({})
-    active_24h = await users_catcher_col.count_documents({"last_catch_date": {"$gte": time.time() - 86400}})
-    total_groups = await groups_col.count_documents({})
-    text = (
-        "📊 **MAU Stats**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 **Total Users:** {total_users}\n"
-        f"🔥 **Active (24h):** {active_24h}\n"
-        f"🪐 **Active Groups:** {total_groups}"
-    )
-    await reply_tag(event, text, parse_mode='markdown')
+
+    reply_msg = await event.get_reply_message()
+    command_text = event.pattern_match.group(1) if event.pattern_match.group(1) else None
+
+    # ဘာမှမပါရင် သုံးပုံပြပါ
+    if not reply_msg and not command_text:
+        await reply_tag(
+            event,
+            "📢 **Usage:**\n"
+            "• Reply to a message with `/send` to forward it to all groups.\n"
+            "• Or type `/send Hello everyone!` to broadcast a text message.",
+            parse_mode='markdown'
+        )
+        return
+
+    status_msg = await reply_tag(event, "📢 <b>BROADCAST INITIATED</b>", parse_mode='html')
+    groups = await groups_col.find().to_list(length=None)
+    if not groups:
+        await status_msg.edit("⚠️ No groups found in database.", parse_mode='html')
+        return
+
+    success = 0
+    fail = 0
+
+    for g in groups:
+        chat_id = g['chat_id']
+        try:
+            if reply_msg:
+                await bot.forward_messages(chat_id, reply_msg)
+            else:
+                await bot.send_message(chat_id, command_text, parse_mode='html')
+            success += 1
+            await asyncio.sleep(4)  # Flood protection
+
+        except FloodWaitError as e:
+            # Flood wait ကျရင် စောင့်ပြီး ပြန်ကြိုးစားမယ် (တစ်ခါပဲ)
+            await asyncio.sleep(e.seconds + 2)
+            try:
+                if reply_msg:
+                    await bot.forward_messages(chat_id, reply_msg)
+                else:
+                    await bot.send_message(chat_id, command_text, parse_mode='html')
+                success += 1
+            except Exception:
+                fail += 1
+        except Exception:
+            fail += 1
+
+    await status_msg.edit(
+        f"✅ <b>BROADCAST COMPLETE</b>\n"
+        f"📨 <b>Success:</b> <code>{success}</code>\n"
+        f"❌ <b>Failed:</b> <code>{fail}</code>",
+        parse_mode='html'
+            )
 
 # ==========================================
 # /today – today's top catchers
