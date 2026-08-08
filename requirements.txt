@@ -4,3 +4,4 @@ pymongo==4.6.1
 deep-translator==1.11.4
 dotenv
 aiohttp
+pytz
