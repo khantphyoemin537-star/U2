@@ -1,5 +1,5 @@
 python-telegram-bot
-telethon
+telethon==1.37.0
 pymongo
 flask
 Pillow
