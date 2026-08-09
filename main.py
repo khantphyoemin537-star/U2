@@ -7375,6 +7375,46 @@ async def _dex_get_owned_ids(user_id):
         return set()
     return {c.get("char_id") for c in user_doc.get("harem", []) if isinstance(c, dict) and c.get("char_id")}
 
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]cleanall(?:@\w+)?(?:\s+(confirm))?$', 'bot1')))
+async def clean_all_database_handler(event):
+    # Owner မှသာ သုံးခွင့်ရမယ်
+    if event.sender_id != OWNER_ID:
+        return
+
+    # DM ထဲမှာပဲ အလုပ်လုပ်မယ် (Group ထဲမှာ မတော်တဆ မဖြစ်အောင်)
+    if not event.is_private:
+        return await event.reply("⚠️ ဒီ Command ကို Bot DM ထဲမှာပဲ သုံးလို့ရပါတယ်။", parse_mode='html')
+
+    confirm = bool(event.pattern_match.group(1))
+
+    # အတည်ပြုချက်မပါရင် သတိပေးမယ်
+    if not confirm:
+        return await event.reply(
+            "🚨 **Database အကုန်လုံးကို ဖျက်တော့မလား?**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "ဒါဆိုရင် အောက်ပါအချက်အလက်တွေ အကုန်ပျက်သွားမယ်။\n"
+            "• ကစားသမားအားလုံးရဲ့ ပိုက်ဆံ၊ Star၊ Harem\n"
+            "• Character စာရင်း အကုန်\n"
+            "• Market စာရင်း\n"
+            "• Squad စာရင်း\n"
+            "• Gift မှတ်တမ်း အကုန်\n\n"
+            "❌ **ပြန်ပြင်လို့ မရဘူး။**\n\n"
+            "အတည်ပြုရင် `/cleanall confirm` လို့ ရိုက်ပါ။",
+            parse_mode='html'
+        )
+
+    # အတည်ပြုပြီးရင် Database ဖျက်မယ်
+    try:
+        await client_mongo.drop_database('telegram_bot')
+        await event.reply(
+            "✅ **Database အကုန်ဖျက်ပြီးပါပြီ။**\n"
+            "Bot က အခုမှစတင်သလို ဖြစ်သွားပါပြီ။\n"
+            "ပြန်စဖို့ /start ရိုက်ပြီး ပြန်လည်စတင်ပါ။",
+            parse_mode='html'
+        )
+    except Exception as e:
+        await event.reply(f"❌ ဖျက်နေစဉ် အမှားရှိသွားတယ်: `{e}`", parse_mode='html')
+        
 # ---- /dex : Show all categories with pagination ----
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]dex(?:@\w+)?$', 'bot1')))
 async def dex_categories_handler(event):
