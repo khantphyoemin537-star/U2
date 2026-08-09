@@ -1494,8 +1494,13 @@ async def create_indexes():
     # ❌ REMOVED: gotu_pairs_col, gotu_games_col, gotu_players_col, quiz_questions_col, quiz_msg_counters_col
     await _migrate_rarity_tiers()
     print("Database Indexes synchronized! ✔️")
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 bot1 = TelegramClient('bot_main_session', APP_ID, APP_HASH, flood_sleep_threshold=10)
+
 # 🔐 bot2 — dedicated owner-control bot. Handles ONLY /addchar, /ktr, /ktrr, /rtclean,
 # /shadow, /unshadow. Everything else stays on bot1.
 bot2 = TelegramClient('bot_owner_session', APP_ID, APP_HASH, flood_sleep_threshold=10)
