@@ -5432,7 +5432,7 @@ CATCH_USAGE_TEXT = (
 # tone. /obtain (and the .obtain dot-form) still work as a legacy alias, and /collect is
 # still retired (a different, unrelated bot in the same groups uses that name — see below).
 # /morgan stays as its own separate fun alias, unrelated to this rename.
-@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](?:morgan|fuck|obtain)(?:@\w+)?\s+(.*)$', 'bot1')))
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](?:morgan|fuck|fuck)(?:@\w+)?\s+(.*)$', 'bot1')))
 async def catch_handler(event):
     if event.is_private: return
     user_id = event.sender_id
