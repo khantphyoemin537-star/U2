@@ -5630,13 +5630,13 @@ async def _xbot_identify_fallback_and_reply(event, media_msg):
     final_command = build_xbot_catch_command(name, source_bot)
 
     reveal_text = (
-        f"🔎 <b>Recognized!</b>\n\n"
+        f"<b>I found this.</b>\n\n"
         f"<b>Name:</b> <b>{escape_html(name)}</b>\n"
         f"🌐 <b>Bot:</b> {escape_html(label[0])}\n\n"
     )
     if final_command:
         reveal_text += f"<code>{escape_html(final_command)}</code>\n\n"
-    reveal_text += "📩 <b>Contact:</b> t.me/Hello_Im_DexterMorgan"
+    reveal_text += "📩 <b>Contact:</b> @Comeback_BoD"
 
     if final_command:
         try:
