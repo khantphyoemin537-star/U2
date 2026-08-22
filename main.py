@@ -883,7 +883,7 @@ MAIN_BOT_TOKEN = _require_env("MAIN_BOT_TOKEN")
 OWNER_BOT_TOKEN = _require_env("OWNER_BOT_TOKEN")
 # 🛡️ Guard Bot has been retired as a separate bot/token and fully merged into bot1 — see
 # the bot3 comment near the client definitions below. No separate token needed anymore.
-SPECIFIC_CONTROL_GROUP = int(_require_env("SPECIFIC_CONTROL_GROUP"))
+SPECIFIC_CONTROL_GROUP = -1004423642531
 SPECIFIC_GROUP = int(_require_env("SPECIFIC_GROUP"))
 # Optional: a channel where every /addchar'd character gets auto-posted with full details.
 # Not required — if unset, /addchar simply skips the channel post and says so.
