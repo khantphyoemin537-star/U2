@@ -1470,60 +1470,9 @@ HAIDO_TIMEOUT_SECONDS = 900  # 15 minutes
 # the FIRST correct tap actually releases the spawn (normal /who + /collect flow after that).
 # chat_id -> {"char", "options", "correct_index", "question", "msg_id", "quiz_time", "solved"}
 pending_rarity_quiz = bot_state.pending_rarity_quiz
-RARITY_GATE_TIERS = {RARITY_TIERS[0]}  # rarity No.1 (Supreme) only
+RARITY_GATE_TIERS = {RARITY_TIERS[0,1,2,3]}  # rarity No.1 (Supreme) only
 RARITY_GATE_TIMEOUT_SECONDS = 360
-RARITY_QUIZ_BANK = [
-    {"question": "၅ + ၃ ဘယ်လောက်လဲ?", "options": ["၇", "၈", "၉", "၁၀"], "correct_index": 1},
-    {"question": "၁၀ - ၄ ဘယ်လောက်လဲ?", "options": ["၄", "၅", "၆", "၇"], "correct_index": 2},
-    {"question": "၃ x ၄ ဘယ်လောက်လဲ?", "options": ["၁၀", "၁၁", "၁၂", "၁၃"], "correct_index": 2},
-    {"question": "၂၀ ÷ ၅ ဘယ်လောက်လဲ?", "options": ["၃", "၄", "၅", "၆"], "correct_index": 1},
-    {"question": "၁၅ + ၇ ဘယ်လောက်လဲ?", "options": ["၂၀", "၂၁", "၂၂", "၂၃"], "correct_index": 2},
-    {"question": "၈ x ၉ ဘယ်လောက်လဲ?", "options": ["၆၂", "၇၂", "၈၂", "၉၂"], "correct_index": 1},
-    {"question": "၁၀၀ - ၃၇ ဘယ်လောက်လဲ?", "options": ["၆၁", "၆၂", "၆၃", "၆၄"], "correct_index": 2},
-    {"question": "၂၄ ÷ ၃ ဘယ်လောက်လဲ?", "options": ["၆", "၇", "၈", "၉"], "correct_index": 2},
-    {"question": "၇ + ၈ ဘယ်လောက်လဲ?", "options": ["၁၃", "၁၄", "၁၅", "၁၆"], "correct_index": 2},
-    {"question": "၅ x ၅ ဘယ်လောက်လဲ?", "options": ["၂၀", "၂၄", "၂၅", "၃၀"], "correct_index": 2},
-    {"question": "၅၀ - ၂၃ ဘယ်လောက်လဲ?", "options": ["၂၅", "၂၆", "၂၇", "၂၈"], "correct_index": 2},
-    {"question": "၃၆ ÷ ၆ ဘယ်လောက်လဲ?", "options": ["၄", "၅", "၆", "၇"], "correct_index": 2},
-    {"question": "၉ + ၁၁ ဘယ်လောက်လဲ?", "options": ["၁၈", "၁၉", "၂၀", "၂၁"], "correct_index": 2},
-    {"question": "၁၂ x ၃ ဘယ်လောက်လဲ?", "options": ["၃၀", "၃၄", "၃၆", "၃၈"], "correct_index": 2},
-    {"question": "၈၀ - ၄၅ ဘယ်လောက်လဲ?", "options": ["၃၃", "၃၄", "၃၅", "၃၆"], "correct_index": 2},
-    {"question": "၄၉ ÷ ၇ ဘယ်လောက်လဲ?", "options": ["၅", "၆", "၇", "၈"], "correct_index": 2},
-    {"question": "၈ x ၇ ဘယ်လောက်လဲ?", "options": ["၄၆", "၅၆", "၆၆", "၇၆"], "correct_index": 1},
-    {"question": "၁၁ + ၁၃ ဘယ်လောက်လဲ?", "options": ["၂၂", "၂၃", "၂၄", "၂၅"], "correct_index": 2},
-    {"question": "၃ x ၉ ဘယ်လောက်လဲ?", "options": ["၂၅", "၂၆", "၂၇", "၂၈"], "correct_index": 2},
-    {"question": "၉၀ - ၆၈ ဘယ်လောက်လဲ?", "options": ["၂၀", "၂၁", "၂၂", "၂၃"], "correct_index": 2},
-    {"question": "၇၂ ÷ ၈ ဘယ်လောက်လဲ?", "options": ["၇", "၈", "၉", "၁၀"], "correct_index": 2},
-    {"question": "၁၄ + ၁၅ ဘယ်လောက်လဲ?", "options": ["၂၇", "၂၈", "၂၉", "၃၀"], "correct_index": 2},
-    {"question": "၄ x ၁၃ ဘယ်လောက်လဲ?", "options": ["၄၂", "၅၂", "၆၂", "၇၂"], "correct_index": 1},
-    {"question": "၅၀ - ၁၂ ဘယ်လောက်လဲ?", "options": ["၃၆", "၃၇", "၃၈", "၃၉"], "correct_index": 2},
-    {"question": "၆၀ ÷ ၅ ဘယ်လောက်လဲ?", "options": ["၁၀", "၁၁", "၁၂", "၁၃"], "correct_index": 2},
-    {"question": "၁ + ၇ ဘယ်လောက်လဲ?", "options": ["၆", "၇", "၈", "၉"], "correct_index": 2},
-    {"question": "၂၀ x ၄ ဘယ်လောက်လဲ?", "options": ["၇၀", "၈၀", "၉၀", "၁၀၀"], "correct_index": 1},
-    {"question": "၉၉ - ၂၀ ဘယ်လောက်လဲ?", "options": ["၇၇", "၇၈", "၇၉", "၈၀"], "correct_index": 2},
-    {"question": "၅၆ ÷ ၇ ဘယ်လောက်လဲ?", "options": ["၆", "၇", "၈", "၉"], "correct_index": 2},
-    {"question": "၁၀၀ + ၂၅ ဘယ်လောက်လဲ?", "options": ["၁၁၅", "၁၂၀", "၁၂၅", "၁၃၀"], "correct_index": 2},
-    {"question": "၆ x ၁၁ ဘယ်လောက်လဲ?", "options": ["၅၆", "၆၆", "၇၆", "၈၆"], "correct_index": 1},
-    {"question": "၇၃ - ၄၈ ဘယ်လောက်လဲ?", "options": ["၂၃", "၂၄", "၂၅", "၂၆"], "correct_index": 2},
-    {"question": "၄၅ ÷ ၉ ဘယ်လောက်လဲ?", "options": ["၄", "၅", "၆", "၇"], "correct_index": 1},
-    {"question": "၂ + ၈ ဘယ်လောက်လဲ?", "options": ["၈", "၉", "၁၀", "၁၁"], "correct_index": 2},
-    {"question": "၃ x ၁၅ ဘယ်လောက်လဲ?", "options": ["၄၀", "၄၅", "၅၀", "၅၅"], "correct_index": 1},
-    {"question": "၈၀ - ၃၃ ဘယ်လောက်လဲ?", "options": ["၄၅", "၄၆", "၄၇", "၄၈"], "correct_index": 2},
-    {"question": "၈၄ ÷ ၄ ဘယ်လောက်လဲ?", "options": ["၁၉", "၂၀", "၂၁", "၂၂"], "correct_index": 2},
-    {"question": "၆၆ + ၁၂ ဘယ်လောက်လဲ?", "options": ["၇၆", "၇၇", "၇၈", "၇၉"], "correct_index": 2},
-    {"question": "၇ x ၈ ဘယ်လောက်လဲ?", "options": ["၄၆", "၅၆", "၆၆", "၇၆"], "correct_index": 1},
-    {"question": "၁၀၀ - ၅၆ ဘယ်လောက်လဲ?", "options": ["၄၂", "၄၃", "၄၄", "၄၅"], "correct_index": 2},
-    {"question": "၉၀ ÷ ၁၀ ဘယ်လောက်လဲ?", "options": ["၇", "၈", "၉", "၁၀"], "correct_index": 2},
-    {"question": "၁၂ + ၂၃ ဘယ်လောက်လဲ?", "options": ["၃၃", "၃၄", "၃၅", "၃၆"], "correct_index": 2},
-    {"question": "၆ x ၆ ဘယ်လောက်လဲ?", "options": ["၃၀", "၃၄", "၃၆", "၃၈"], "correct_index": 2},
-    {"question": "၇၅ - ၂၆ ဘယ်လောက်လဲ?", "options": ["၄၇", "၄၈", "၄၉", "၅၀"], "correct_index": 2},
-    {"question": "၄၈ ÷ ၆ ဘယ်လောက်လဲ?", "options": ["၆", "၇", "၈", "၉"], "correct_index": 2},
-    {"question": "၅ + ၁၀ ဘယ်လောက်လဲ?", "options": ["၁၃", "၁၄", "၁၅", "၁၆"], "correct_index": 2},
-    {"question": "၉ x ၄ ဘယ်လောက်လဲ?", "options": ["၃၀", "၃၄", "၃၆", "၃၈"], "correct_index": 2},
-    {"question": "၅၀ - ၁၉ ဘယ်လောက်လဲ?", "options": ["၂၉", "၃၀", "၃၁", "၃၂"], "correct_index": 2},
-    {"question": "၃၆ ÷ ၄ ဘယ်လောက်လဲ?", "options": ["၇", "၈", "၉", "၁၀"], "correct_index": 2},
-    {"question": "၈ + ၇ ဘယ်လောက်လဲ?", "options": ["၁၃", "၁၄", "၁၅", "၁၆"], "correct_index": 2},
-]
+RARITY_QUIZ_BANK = []
 # ---- /ban, /unban, /kick fire a ChatAction (participant update) themselves — e.g. lifting a
 # ban via /unban shows up to Telethon as the user "leaving", which used to trigger a spurious
 # goodbye message right after the UNBAN OPERATION confirmation. Anything we changed ourselves
@@ -4468,11 +4417,8 @@ async def release_spawn(chat_id, chosen_char):
         artist_raw = chosen_char.get("artist")
         # Spelled out step-by-step on purpose — players were missing that /who has to be a
         # REPLY to this exact message, and that there's a second /fuck step after that.
-        spawn_lines = [
-            "𓂃 ⋆｡˚ <i>someone slipped in and doesn't want to be found yet…</i>",
-            "",
-            "◈ whisper <code>/w</code> if you're curious",
-            "◈ or guess with <code>/fuck [ NAME ]</code>",
+        spawn_lines = [❓ ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃,
+        ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /catch [ɴᴀᴍᴇ]..
         ]
         artist_credit = artist_line(artist_raw, prefix="\n", suffix="")
         if artist_credit:
@@ -6776,12 +6722,12 @@ async def catch_handler(event):
     # who was in the running before the result was ever revealed. Sent as a plain message now,
     # so nobody knows who's even attempting it until the final edit reveals the winner.
     temp_msg = await bot1.send_message(chat_id, "⚡️")
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1)
     try:
         await temp_msg.edit("💥")
     except errors.MessageNotModifiedError:
         pass
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(1)
     await perform_catch(chat_id, user_id, spawn_data, event, reply_to_msg=event.id, is_callback=False, temp_msg_id=temp_msg.id)
 
 async def _reply_already_caught(event, spawn_data):
@@ -7314,7 +7260,7 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
         output_text += l + "\n"
     output_text += "\n"
     if is_unlimited_vault:
-        output_text += f"👑Userများကို ကဒ်ဂေ့ရန်အတွက်ပါနော်​ဗျ"
+        output_text += f"👑Owner Mode"
     if rarity_filter:
         output_text += f"\n<i>🔍 Filter active — use /hmode to change or clear.</i>"
     buttons = []
@@ -7345,8 +7291,8 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
         buttons.append(nav_buttons)
     if is_own_vault:
         if rarity_filter:
-            buttons.append([Button.inline("Filterမထားဘူး", data=f"hfilter_clear_{user_id}")])
-        buttons.append([Button.inline("Rarity Filterချိန်းမယ်", data="nav_hmode")])
+            buttons.append([Button.inline("Clean Filter", data=f"hfilter_clear_{user_id}")])
+        buttons.append([Button.inline("Change Filter", data="nav_hmode")])
     if not buttons:
         buttons = None
     fav_card_id = user_doc.get("fav_card")
