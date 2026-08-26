@@ -1470,8 +1470,8 @@ HAIDO_TIMEOUT_SECONDS = 900  # 15 minutes
 # the FIRST correct tap actually releases the spawn (normal /who + /collect flow after that).
 # chat_id -> {"char", "options", "correct_index", "question", "msg_id", "quiz_time", "solved"}
 pending_rarity_quiz = bot_state.pending_rarity_quiz
-RARITY_GATE_TIERS = {RARITY_TIERS[0,1,2,3]}  # rarity No.1 (Supreme) only
-RARITY_GATE_TIMEOUT_SECONDS = 360
+RARITY_GATE_TIERS = {RARITY_TIERS[0], RARITY_TIERS[1], RARITY_TIERS[2], RARITY_TIERS[3]}
+RARITY_GATE_TIMEOUT_SECONDS = 60
 RARITY_QUIZ_BANK = []
 # ---- /ban, /unban, /kick fire a ChatAction (participant update) themselves — e.g. lifting a
 # ban via /unban shows up to Telethon as the user "leaving", which used to trigger a spurious
