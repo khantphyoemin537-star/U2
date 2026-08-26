@@ -4417,8 +4417,9 @@ async def release_spawn(chat_id, chosen_char):
         artist_raw = chosen_char.get("artist")
         # Spelled out step-by-step on purpose — players were missing that /who has to be a
         # REPLY to this exact message, and that there's a second /fuck step after that.
-        spawn_lines = ["❓ ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃,
-        ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /catch [ɴᴀᴍᴇ].."
+        spawn_lines = [
+            "❓ ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃",
+            "ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /fuck [ɴᴀᴍᴇ].."
         ]
         artist_credit = artist_line(artist_raw, prefix="\n", suffix="")
         if artist_credit:
