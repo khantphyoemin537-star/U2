@@ -4333,14 +4333,9 @@ async def group_counter_flush_loop():
             await groups_counters_col.bulk_write(ops, ordered=False)
         except Exception as e:
             logging.error(f"Group counter flush error: {e}")
-
 # ---- TRIGGER DYNAMIC SPAWN ----
 async def trigger_dynamic_spawn(chat_id):
     if chat_id in active_group_spawns or chat_id in pending_rarity_quiz: return
-    # 🔒 Two messages can cross the spawn_target threshold within milliseconds of each other —
-    # both would pass the check above since neither active_group_spawns nor pending_rarity_quiz
-    # has been written yet. Serialize on the same per-chat lock the quiz-solve callback already
-    # uses, and re-check once inside it, so only the first caller actually spawns anything.
     async with spawn_locks[chat_id]:
         if chat_id in active_group_spawns or chat_id in pending_rarity_quiz: return
         try:
@@ -4354,7 +4349,6 @@ async def trigger_dynamic_spawn(chat_id):
             eligible_characters = []
             for char in characters_list:
                 limit = char.get("spawn_limit", 0)
-                # spawn_count now represents number of catches, so compare against limit
                 if limit and limit > 0 and char.get("spawn_count", 0) >= limit:
                     continue
                 eligible_characters.append(char)
@@ -4366,16 +4360,7 @@ async def trigger_dynamic_spawn(chat_id):
                     f"raise CatchLimit to fix."
                 )
                 return
-            # ⚖️ Configurable via /spawnweight (groups 1-3 / 4-6 / 7-9); falls back to
-            # DEFAULT_RARITY_WEIGHTS for any group left unset.
             RARITY_WEIGHTS = get_effective_rarity_weights()
-
-            # 🛡️ RELIABILITY: a character whose storage media has gone missing (deleted from
-            # the control group, corrupted forward, etc.) used to silently swallow the ENTIRE
-            # spawn attempt — trigger_dynamic_spawn would just quietly return and the group
-            # would have to rack up a whole new spawn_target's worth of messages before getting
-            # another chance. Now we retry with a different character (excluding whichever ones
-            # just failed) a few times before giving up, so one bad entry can't stall a group.
             candidates = list(eligible_characters)
             max_attempts = min(5, len(candidates))
             for attempt in range(max_attempts):
@@ -4384,12 +4369,12 @@ async def trigger_dynamic_spawn(chat_id):
                     for c in candidates
                 ]
                 chosen_char = random.choices(candidates, weights=weights, k=1)[0]
-                # 🔓 Rarity gate disabled at the request of the owner (2026-08-10): every tier,
-                # including RARITY_GATE_TIERS (Sweetie/No.1), now releases straight to the group
-                # with no quiz step first. start_rarity_gate_quiz() and RARITY_GATE_TIERS are left
-                # intact elsewhere (e.g. /spawnweight's status text, /addquiz management) — this is
-                # the only call site that decided whether to gate, so this alone turns it off.
-                ok = await release_spawn(chat_id, chosen_char)
+                # ✅ Rarity gate ကို RARITY_GATE_TIERS ထဲပါတဲ့ Rarity တွေအတွက်သာ ဖွင့်မယ်
+                tier = classify_rarity(chosen_char.get("rarity", ""))
+                if tier in RARITY_GATE_TIERS:
+                    ok = await start_rarity_gate_quiz(chat_id, chosen_char)
+                else:
+                    ok = await release_spawn(chat_id, chosen_char)
                 if ok:
                     return
                 candidates = [c for c in candidates if c["char_id"] != chosen_char["char_id"]]
@@ -4401,7 +4386,6 @@ async def trigger_dynamic_spawn(chat_id):
         except Exception as e:
             print(f"Spawn Error Tracker: {e}")
             await report_system_error(f"trigger_dynamic_spawn (chat {chat_id})", e)
-
 async def release_spawn(chat_id, chosen_char):
     """Actually post the spawn message + open the /who window for chosen_char. Used both for
     normal spawns and for gated (Sweetie, No.1 only) spawns once their quiz gate has been solved.
@@ -4508,11 +4492,8 @@ async def start_rarity_gate_quiz(chat_id, chosen_char):
 
         rarity_display = chosen_char.get("rarity", "Unknown")
         quiz_text = (
-            f"◈ <b>not just anyone gets to find me…</b>\n"
             f"<b>Rarity:</b> {rarity_display}\n\n"
-            f"❓ <b>{escape_html(q['question'])}</b>\n\n"
-            f"⏱ <b>{RARITY_GATE_TIMEOUT_SECONDS} seconds</b> — answer first, and I'm yours\n"
-            f"🧨 <i>မှားဖြေမိရင် အခွင့်အရေး ထပ်မရနိုင်ပါ.</i>"
+            f"<b>{escape_html(q['question'])}</b>\n\n"
         )
         buttons = [[Button.inline(f"{chr(65 + i)}. {opt}", data=f"rgate_{chat_id}_{i}")] for i, opt in enumerate(shuffled_options)]
 
@@ -6515,18 +6496,10 @@ DAILY_CATCH_LIMIT = 22  # flat cap for everyone — single source of truth, used
 # limit check in catch_handler and the /today "who hit the limit first" ranking below.
 
 async def perform_catch(chat_id, user_id, spawn_data, event, reply_to_msg=None, is_callback=False, temp_msg_id=None):
-    """Grants the catch reward. IMPORTANT: by the time this is called, catch_handler has
-    already atomically marked spawn_data['claimed'] = True under spawn_locks[chat_id] —
-    that's the actual "who wins" decision. This function no longer re-checks or re-locks
-    that; it assumes the caller already won and just needs the reward + message sent.
-    (This split is what fixes the freeze/spam under simultaneous catches — see catch_handler.)"""
     mention = await get_html_mention(event, user_id)
     plain_name = await get_plain_name(event, user_id)
     await ensure_user_registered(user_id, plain_name)
     try:
-        # Update user: add card, increment total, balance, group catches, and daily catches.
-        # find_one_and_update (not update_one) so we get the POST-increment daily_catches
-        # back atomically, with no separate read that could race against another catch.
         updated_user = await users_catcher_col.find_one_and_update(
             {"user_id": user_id},
             {
@@ -6549,83 +6522,71 @@ async def perform_catch(chat_id, user_id, spawn_data, event, reply_to_msg=None, 
             upsert=True,
             return_document=ReturnDocument.AFTER
         )
-        # Record exactly when this user's daily_catches first reached today's cap — this is
-        # what /today's leaderboard sorts by ("who hit the limit first"). daily_catches only
-        # ever moves up by 1 and is reset to 0 (with daily_limit_hit_at unset) at the start of
-        # each new day — see the day-rollover check in catch_handler below — so the update
-        # that brings it to exactly DAILY_CATCH_LIMIT is the one and only moment that happens
-        # today, and the $exists guard makes the write itself idempotent too.
         effective_limit = DAILY_CATCH_LIMIT
         if updated_user and updated_user.get("daily_catches") == effective_limit:
             await users_catcher_col.update_one(
                 {"user_id": user_id, "daily_limit_hit_at": {"$exists": False}},
                 {"$set": {"daily_limit_hit_at": datetime.now(TZ)}}
             )
-        # ✅ Increment spawn_count ONLY on successful catch
         await characters_base_col.update_one(
             {"char_id": spawn_data['char_id']},
             {"$inc": {"spawn_count": 1}}
         )
-        guild_levelup_msg = ""
-        user_guild = await guilds_col.find_one({"members": user_id})
-        if user_guild:
-            new_xp = user_guild["xp"] + 10
-            current_level = user_guild["level"]
-            if new_xp >= (current_level * 500):
-                await guilds_col.update_one({"_id": user_guild["_id"]}, {"$set": {"xp": 0}, "$inc": {"level": 1}})
-                guild_levelup_msg = f"\n\n🏰 <b>Guild Level Up!</b> 👑\nYour guild <b>[{escape_html(user_guild['name'])}]</b> is now Level <b>{current_level + 1}</b>! 🎉"
-            else:
-                await guilds_col.update_one({"_id": user_guild["_id"]}, {"$inc": {"xp": 10}})
+        # ✅ New code: get category stats
+        category = spawn_data.get('category', 'Unknown')
+        cat_char_ids = await characters_base_col.distinct("char_id", {"category": category})
+        owned_harem_set = {item.get("char_id") for item in updated_user.get("harem", []) if isinstance(item, dict) and item.get("char_id")}
+        owned_in_cat = sum(1 for cid in cat_char_ids if cid in owned_harem_set)
+        total_in_cat = len(cat_char_ids)
+        cat_display = f"🏖️ Aɴɪᴍᴇ: {escape_html(category)} ({owned_in_cat}/{total_in_cat})"
+
+        # ✅ New message format
         character_name = spawn_data['name']
-        newly_earned = await check_and_award_achievements(user_id)
-        raw_event_name = spawn_data.get('event')
-        event_display = escape_html(raw_event_name) if raw_event_name and raw_event_name != "General" else ""
         rarity_tier = classify_rarity(spawn_data['rarity'])
         rarity_emoji = RARITY_EMOJI.get(rarity_tier, RARITY_DEFAULT_EMOJI)
+        # Remove 'No.X' from rarity display
+        rarity_display = strip_rarity_number(spawn_data['rarity'])
 
         success_msg = (
-            f"◈ caught.\n\n"
-            f"<b>{mention}</b>, {escape_html(character_name)}'s heart is yours now{' (' + event_display + ')' if event_display else ''} 🤍\n"
-            f""
-            f"{rarity_emoji} {strip_rarity_number(spawn_data['rarity'])} · #{display_char_id(spawn_data['char_id'])}\n"
-            f"{artist_line(spawn_data.get('artist'))}"
-            f"\n"
-            f"<code>/harem</code> to see who else is waiting for you…"
+            f"🪷 {mention}, ʏᴏᴜ ꜰᴜᴄᴋᴇᴅ ᴀ ɴᴇᴡ ᴄʜᴀʀᴀᴄᴛᴇʀ!\n\n"
+            f"🫧 Nᴀᴍᴇ: {escape_html(character_name)} | 🐧 {display_char_id(spawn_data['char_id'])}\n"
+            f"{rarity_emoji} {RARITY_LABEL_STYLED}: {rarity_display}\n"
+            f"{cat_display}\n\n"
+            f"👒 ᴄʜᴇᴄᴋ ʏᴏᴜʀ /harem!"
         )
 
-        if guild_levelup_msg:
-            success_msg += guild_levelup_msg
-        success_msg += format_achievement_unlocks(newly_earned)
+        # ✅ အောင်မြင်မှုဆုတွေ ရှိရင် ထည့်ပေးမယ်
+        newly_earned = await check_and_award_achievements(user_id)
+        if newly_earned:
+            success_msg += format_achievement_unlocks(newly_earned)
+
         success_buttons = [[
-            Button.switch_inline("🤍 my harem", query=f"harem.{user_id}", same_peer=True),
+            Button.switch_inline("🤍 harem", query=f"harem.{user_id}", same_peer=True),
             Button.inline("◈ profile", data=f"catchprofile_{user_id}")
         ]]
-        if chat_id in active_group_spawns: del active_group_spawns[chat_id]
-        if chat_id in spawn_locks: del spawn_locks[chat_id]
+
+        if chat_id in active_group_spawns: 
+            del active_group_spawns[chat_id]
+        if chat_id in spawn_locks: 
+            del spawn_locks[chat_id]
+
         if is_callback:
             await bot1.send_message(chat_id, success_msg, reply_to=reply_to_msg or event.message_id, parse_mode='html', buttons=success_buttons)
         elif temp_msg_id:
-            # 🩹 Edit the 🐛→🦋 catching-animation message into the final result in place,
-            # instead of deleting it and sending a brand new message — one message, no flicker.
             try:
                 await bot1.edit_message(chat_id, temp_msg_id, success_msg, parse_mode='html', buttons=success_buttons)
             except errors.MessageNotModifiedError:
                 pass
             except Exception:
-                # Edit failed for some other reason (e.g. message too old) — make sure the
-                # player still sees their result rather than silently losing it.
                 await event.reply(success_msg, parse_mode='html', buttons=success_buttons)
         else:
             await event.reply(success_msg, parse_mode='html', buttons=success_buttons)
         return True
     except Exception as e:
-        # NOTE: we deliberately do NOT reset claimed=False here. This spawn was already
-        # atomically handed to this user in catch_handler — reopening it after a failure
-        # (e.g. a Telegram flood-wait mid-flow) is exactly how two people could end up
-        # winning the same character. Instead we clear the spawn out so the game doesn't
-        # get stuck, log the fault, and let the next spawn come normally.
-        if chat_id in active_group_spawns: del active_group_spawns[chat_id]
-        if chat_id in spawn_locks: del spawn_locks[chat_id]
+        if chat_id in active_group_spawns: 
+            del active_group_spawns[chat_id]
+        if chat_id in spawn_locks: 
+            del spawn_locks[chat_id]
         error_msg = f"❌ <b>Catch Logic Fault:</b> {e}"
         if is_callback:
             await bot1.send_message(chat_id, error_msg, parse_mode='html')
