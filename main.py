@@ -966,6 +966,42 @@ def format_achievement_unlocks(newly_earned):
     return f"\n\n🏅 <b>ACHIEVEMENT UNLOCKED!</b>\n{lines}"
 
 # ==========================================
+# 🎖️ GIFT RANK TITLES — ...
+# ==========================================
+GIFT_TIER_THRESHOLDS = (10, 30, 50, 100, 200, 300)  # 300+ is the open-ended top tier
+
+GIFT_GIVER_TITLES = [  # (threshold, emoji, title)
+    (300, "🏆", "ကဒ်ဘုရင်"),        # Card King
+    (200, "👑", "ကဒ်မင်းလေး"),          # Card Prince
+    (100, "⚔️", "ကဒ်သခင်"),         # Card Lord
+    (50, "📜", "ကဒ်ဆရာ"),           # Card Master
+    (30, "🎗️", "ကဒ်ရက်ရောရှင်"),    # Generous Card-Giver
+    (10, "🎁", "ကဒ်အလှူရှင်"),        # Card Donor
+]
+GIFT_RECEIVER_TITLES = [  # (threshold, emoji, title)
+    (300, "👑", "ကဒ်ဘုန်းရှင်"),     # The Glorious One
+    (200, "🌺", "ကဒ်ဂုဏ်ရှင်"),      # The Honored One
+    (100, "💎", "ကဒ်မြတ်နိုးရှင်"),   # The Cherished One
+    (50, "🌟", "ကဒ်ကျော်စောရှင်"),   # The Renowned One
+    (30, "💝", "ကဒ်နှစ်လိုရှင်"),     # The Beloved One
+    (10, "🎀", "ကဒ်ကံရှင်"),         # Fortune's Chosen
+]
+
+def _gift_title_for_count(count, titles_desc):
+    """titles_desc must be sorted descending by threshold. Returns (emoji, title) for the
+    highest tier `count` qualifies for, or None if below every threshold."""
+    for threshold, emoji, title in titles_desc:
+        if count >= threshold:
+            return emoji, title
+    return None
+
+def get_giver_title(total_gifted):
+    return _gift_title_for_count(total_gifted, GIFT_GIVER_TITLES)
+
+def get_receiver_title(total_gift_received):
+    return _gift_title_for_count(total_gift_received, GIFT_RECEIVER_TITLES)
+
+# ==========================================
 # SMART TEXT NORMALIZER
 # ==========================================
 def normalize_name(text):
@@ -1778,7 +1814,7 @@ FORCE_SUB_PROMPT_TTL = 30  # seconds — the join-nudge message deletes itself a
 # search/scrap/richest/leaderboard/lb/achievements. Deliberately excludes /start, /help,
 # /game, /weather, /gift, /fav, and every admin/owner-only command — /gift and /fav no longer
 # nudge a non-member to join the force-sub group.
-FORCE_SUB_GATED_COMMANDS = {"slot", "game", "morgan"}
+FORCE_SUB_GATED_COMMANDS = {"​harem", "fuck", "morgan"}
 _FORCE_SUB_CMD_RE = re.compile(r'^[/.](\w+)')
 
 force_sub_membership_cache = bot_state.force_sub_membership_cache  # user_id -> (is_member: bool, expiry_ts: float)
@@ -1828,12 +1864,12 @@ async def send_force_sub_prompt(event):
     force_sub_prompt_last_sent[user_id] = now
     link = await get_force_sub_invite_link()
     text = (
-        "🐉🦋 <b>ခဏစောင့်ဦးနော်!</b> ဒီကောင်လေးတွေကို Collect လုပ်ချင်ရင် အောက်က Group ထဲ အရင်ဝင်ဖို့လိုပါတယ် 🦄\n"
-        "👇 Group ထဲဝင်ပြီးမှ ဒီ command ကို ပြန်ရိုက်ပေးပါ့။\n\n"
-        "🐉🦋 <b>Hold up!</b> You'll need to join our group before you can collect these little guys 🦄\n"
+        "🐉🦋 <b>ခဏစောင့်ဦး</b>fuck or harem လုပ်ချင်ရင် အောက်က Group ထဲ အရင်ဝင်ဖို့လိုပါတယ် 🦄\n"
+        "👇 Group ထဲဝင်ပြီးမှ ဒီ command ကို ပြန်ရိုက်ပေး\n\n"
+        "🐉🦋 <b>Hold up!</b> You'll need to join our group before you can fuck or harem 🦄\n"
         "👇 Tap below to join, then send the command again."
     )
-    buttons = [[Button.url("Join Group / Group ဝင်ရန်", link)]] if link else None
+    buttons = [[Button.url("Join Group", link)]] if link else None
     try:
         msg = await event.reply(text, parse_mode='html', buttons=buttons)
         asyncio.create_task(_delete_after_delay(event.client, event.chat_id, msg.id, delay=FORCE_SUB_PROMPT_TTL))
@@ -2334,7 +2370,6 @@ async def welcome_goodbye(event):
         # ---------- WELCOME & GOODBYE ကို လုံးဝ ဖယ်ရှားမယ် ----------
         # အောက်က ကျန်တဲ့ welcome/goodbye code တွေအကုန်ကို ဖယ်ရှားလိုက်မယ်
         # ဘယ်သူမှ join/leave လုပ်ရင် ဘာမှ မပို့တော့ဘူး
-        return
         
     except Exception as e:
         await report_system_error("Welcome Goodbye Event", e)
