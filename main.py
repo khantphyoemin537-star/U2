@@ -1613,8 +1613,8 @@ MMK_PER_USD = 4000  # the fixed peg: 1 USD = 4000 MMK (old currency, no longer d
 # shown everywhere — it's just the emoji + fancy font tier name, no rank number, so the
 # name itself stays clean (no "No.X", no Burmese) wherever it's displayed.
 _RARITY_VALUE_MAP = {
-    "SUPREME": 1000, "CATAPHRACT": 700, "CROSSVERSE": 500, "DIVINE": 350, "MYSTICAL": 250,
-    "LEGENDARY": 150, "RARE": 100, "UNCOMMON": 60, "COMMON": 30
+    "SUPREME": 100000, "CATAPHRACT": 70000, "CROSSVERSE": 50000, "DIVINE": 35000, "MYSTICAL": 25000,
+    "LEGENDARY": 15000, "RARE": 10000, "UNCOMMON": 6000, "COMMON": 3000
 }
 # ⚠️ Display name for each tier, English only (no Burmese in the rarity name).
 # classify_rarity() still matches on the bare RARITY_TIERS token (e.g. "SUPREME"), which is
@@ -1659,92 +1659,6 @@ async def get_html_mention(event, user_id=None):
     fullname = await get_plain_name(event, user_id)
     if not user_id: user_id = event.sender_id
     return f"<a href='tg://user?id={user_id}'><b>{escape_html(fullname)}</b></a>"
-
-# 🩹 FIX: these two used to hardcode `bot2` no matter which bot's handler called them.
-# Bot1's own welcome_goodbye_enhanced was calling them too, which meant every single join
-# and leave in ANY group bot2 isn't a member of (i.e. almost every public group, since bot2
-# is the owner-only control bot) paid for a network round-trip that was guaranteed to fail
-# before falling back to "Could not fetch" — wasted latency on the hottest possible event
-# (member joins), and the reason bot1's welcome/goodbye could look unreliable. Both now take
-# the calling client explicitly so each bot uses its own connection.
-async def get_user_profile_data(user, chat_id, client=None):
-    """User Profile အပြည့်အစုံကို စုစည်းပေးမယ်"""
-    client = client or bot1
-    first = getattr(user, 'first_name', '') or ''
-    last = getattr(user, 'last_name', '') or ''
-    fullname = f"{first} {last}".strip() or "Unknown User"
-    username = f"@{user.username}" if getattr(user, 'username', None) else "None"
-    user_id = user.id
-    
-    # Premium Status
-    is_premium = getattr(user, 'premium', False)
-    premium_status = "⭐ Premium" if is_premium else "Standard"
-    
-    # Bio (အကယ်၍ ရှိရင်)
-    bio = getattr(user, 'about', '') or "No bio available."
-    
-    # Join Date (အဖွဲ့ထဲဝင်ခဲ့တဲ့ရက်စွဲ)
-    join_date = "Unknown"
-    try:
-        participant = await client.get_participants(chat_id, filter=types.ChannelParticipantsSearch(user_id))
-        if participant:
-            join_date = participant[0].date.strftime("%Y-%m-%d %H:%M:%S") if participant[0].date else "Unknown"
-    except Exception:
-        join_date = "Could not fetch"
-    
-    return {
-        "fullname": fullname,
-        "username": username,
-        "user_id": user_id,
-        "premium_status": premium_status,
-        "is_premium": is_premium,
-        "bio": bio,
-        "join_date": join_date,
-        "user": user
-    }
-
-    
-async def get_profile_photo(user, client=None):
-    """User Profile Photo ကို ယူပေးမယ် (ရှိရင်)"""
-    client = client or bot1
-    try:
-        photos = await client.get_profile_photos(user.id, limit=1)
-        if photos:
-            return photos[0]
-    except Exception:
-        pass
-    return None
-
-def format_join_message(profile):
-    """Join Message ကို UI လှအောင် ဖော်မတ်လုပ်မယ်"""
-    premium_emoji = "⭐" if profile["is_premium"] else ""
-    return f"""
-🪪 <b>Hey,Thers is a New Member.</b>
-
-🪩 <b>Name:</b> {escape_html(profile['fullname'])}
-🦖 <b>User ID:</b> <code>{profile['user_id']}</code>
-🍭 <b>Username:</b> {profile['username']}
-{premium_emoji} <b>Status:</b> {profile['premium_status']}
-🐇 <b>Bio:</b> {escape_html(profile['bio'][:100])}
-🎒 <b>Join Date:</b> <code>{profile['join_date']}</code>
-
-🎒 <i>Welcome to the group! Have a great time.</i>
-    """
-
-def format_leave_message(profile):
-    """Leave Message ကို UI လှအောင် ဖော်မတ်လုပ်မယ်"""
-    premium_emoji = "⭐" if profile["is_premium"] else ""
-    return f"""
-🪪 <b>MEMBER LEFT</b>
-
-🪩 <b>Name:</b> {escape_html(profile['fullname'])}
-🦖 <b>User ID:</b> <code>{profile['user_id']}</code>
-🍭 <b>Username:</b> {profile['username']}
-{premium_emoji} <b>Status:</b> {profile['premium_status']}
-🎒 <b>Join Date:</b> <code>{profile['join_date']}</code>
-
-🎒 <i>Goodbye! Hope to see you again.</i>
-    """
 
 
 def clean_display_name(name, max_len=25, fallback="Unknown"):
@@ -1864,10 +1778,8 @@ async def send_force_sub_prompt(event):
     force_sub_prompt_last_sent[user_id] = now
     link = await get_force_sub_invite_link()
     text = (
-        "🐉🦋 <b>ခဏစောင့်ဦး</b>fuck or harem လုပ်ချင်ရင် အောက်က Group ထဲ အရင်ဝင်ဖို့လိုပါတယ် 🦄\n"
-        "👇 Group ထဲဝင်ပြီးမှ ဒီ command ကို ပြန်ရိုက်ပေး\n\n"
         "🐉🦋 <b>Hold up!</b> You'll need to join our group before you can fuck or harem 🦄\n"
-        "👇 Tap below to join, then send the command again."
+        "Tap below to join, then send the command again."
     )
     buttons = [[Button.url("Join Group", link)]] if link else None
     try:
@@ -1931,77 +1843,6 @@ async def force_sub_join_tracker(event):
     if not user_id or user_id in bot_ids:
         return
     force_sub_membership_cache[user_id] = (True, time.time() + FORCE_SUB_MEMBERSHIP_TTL)
-
-# ==========================================
-# 🛡️ GUARD BOT — JOIN / LEAVE WATCHER (force-join group only)
-# ==========================================
-# Separate concern from force_sub_join_tracker above (which just keeps the membership cache
-# warm) — this just posts a profile card so the room can see who's coming and going, and it's
-# specifically the Guard Bot's job. Reuses get_user_profile_data / get_profile_photo /
-# format_join_message / format_leave_message, which already existed in this file (left over
-# from before welcome/goodbye was disabled bot1-wide) but had nothing calling them — this
-# wires them back up, scoped to just this one group, on bot1.
-# ==========================================
-GUARD_MASS_JOIN_LEAVE_THRESHOLD = 5
-
-async def _guard_bot_join_leave_watcher(event):
-    if event.chat_id != FORCE_SUB_CHAT_ID:
-        return
-    try:
-        target_ids = event.user_ids or [event.user_id]
-        real_ids = [uid for uid in target_ids if uid and uid not in bot_ids]
-        if not real_ids:
-            return
-
-        if len(real_ids) > GUARD_MASS_JOIN_LEAVE_THRESHOLD:
-            if event.user_added or event.user_joined:
-                await bot1.send_message(event.chat_id, bq(f"🪪 <b>{len(real_ids)} new members joined at once.</b> Welcome all!"), parse_mode='html')
-            elif event.user_kicked or event.user_left:
-                await bot1.send_message(event.chat_id, bq(f"👋 <b>{len(real_ids)} members left at once.</b>"), parse_mode='html')
-            return
-
-        if event.user_added or event.user_joined:
-            for uid in real_ids:
-                try:
-                    user = await bot1.get_entity(uid)
-                except Exception:
-                    continue
-                if getattr(user, 'bot', False):
-                    continue
-                profile = await get_user_profile_data(user, event.chat_id, client=bot1)
-                msg = format_join_message(profile)
-                photo = await get_profile_photo(user, client=bot1)
-                try:
-                    if photo:
-                        await bot1.send_file(event.chat_id, photo, caption=msg, parse_mode='html')
-                    else:
-                        await bot1.send_message(event.chat_id, msg, parse_mode='html')
-                except Exception as e:
-                    print(f"⚠️ Guard Bot join card failed for {uid}: {e}")
-
-        elif event.user_kicked or event.user_left:
-            for uid in real_ids:
-                try:
-                    user = await bot1.get_entity(uid)
-                except Exception:
-                    try:
-                        await bot1.send_message(event.chat_id, f"👋 <b>User {uid}</b> has left the chat.", parse_mode='html')
-                    except Exception:
-                        pass
-                    continue
-                if getattr(user, 'bot', False):
-                    continue
-                profile = await get_user_profile_data(user, event.chat_id, client=bot1)
-                msg = format_leave_message(profile)
-                try:
-                    await bot1.send_message(event.chat_id, msg, parse_mode='html')
-                except Exception as e:
-                    print(f"⚠️ Guard Bot leave card failed for {uid}: {e}")
-    except Exception as e:
-        print(f"⚠️ Guard Bot join/leave watcher error: {e}")
-
-bot1.on(events.ChatAction)(_guard_bot_join_leave_watcher)
-
 
 # ==========================================
 # 🚨 ONE-TIME MIGRATION — required after the PHASH_SIZE 8→16 change above. Every character's
@@ -2264,10 +2105,6 @@ async def render_today_leaderboard():
     text += "\n".join(lines)
     return text
 
-@bot1.on(events.NewMessage)
-async def bot1_auto_calculator_handler(event):
-    await _run_auto_calculator(event)
-
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]today(?:@\w+)?$', 'bot1')))
 async def today_command(event):
     text = await render_today_leaderboard()
@@ -2275,8 +2112,6 @@ async def today_command(event):
         return await event.reply("📭 <b>No catches today yet.</b>", parse_mode='html')
     await event.reply(text, parse_mode='html')
 
-
-# ---- WELCOME / GOODBYE ----
 @bot1.on(events.ChatAction)
 async def welcome_goodbye(event):
     try:
@@ -2295,27 +2130,25 @@ async def welcome_goodbye(event):
                     return
                 _recent_bot_added_chats[chat.id] = now_ts
                 
-                # ✅ Member count ကို get_participants နဲ့ မှန်ကန်အောင် ရယူမယ်
+                # ✅ Member count
                 member_count = "Unknown"
                 try:
-                    # get_participants က total ကို ပြန်ပေးတယ်
                     participants = await bot1.get_participants(chat.id, limit=0)
                     if hasattr(participants, 'total'):
                         member_count = f"{participants.total:,}"
                     elif isinstance(participants, list):
                         member_count = f"{len(participants):,}"
                 except Exception as e:
-                    print(f"Member count error (get_participants): {e}")
-                    # Fallback: get_full_chat ကို စမ်းကြည့်မယ်
+                    print(f"Member count error: {e}")
                     try:
                         full_chat = await bot1.get_full_chat(chat.id)
                         if hasattr(full_chat, 'participants_count'):
                             member_count = f"{full_chat.participants_count:,}"
                     except Exception as e2:
-                        print(f"Member count error (get_full_chat): {e2}")
+                        print(f"Member count error (fallback): {e2}")
                         member_count = "N/A"
                 
-                # ✅ Invite link ရယူမယ်
+                # ✅ Invite link
                 group_link = None
                 try:
                     invite = await bot1(ExportChatInviteRequest(chat.id))
@@ -2325,7 +2158,7 @@ async def welcome_goodbye(event):
                 if not group_link:
                     group_link = "Not available (or bot not admin)"
                 
-                # Owner ကို ပို့မယ့် Message
+                # ✅ Owner ကို ပို့မယ့် Message
                 owner_msg = (
                     f"✅ <b>Bot Added to New {'Channel' if is_broadcast_channel else 'Group'}!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -2340,42 +2173,15 @@ async def welcome_goodbye(event):
                     await bot1.send_message(SPECIFIC_GROUP, owner_msg, parse_mode='html')
                 except Exception:
                     pass
-                
-                # Channel ဆိုရင် ဒီမှာပဲ ရပ်မယ်
-                if is_broadcast_channel:
-                    return
-                
-                # Group ဆိုရင် intro message ပို့မယ် (ဖယ်ရှားချင်ရင် ဒီအောက်က ၅ ကြောင်းကို comment လုပ်ပါ)
-                intro_msg = (
-                    f"<b>👾 Character Collector Bot</b> ကနေ ဒီ Group ထဲကို ရောက်ရှိလာပါပြီ!\n\n"
-                    f"ကျွန်တော်ရဲ့ အဓိက ဂိမ်းက <b>Character များ ဖမ်းဆီးစုဆောင်းခြင်း (Collector Game)</b> "
-                    f"ဖြစ်ပါတယ် — ဒီ Group ထဲမှာ Character အသစ်တွေ အခါအားလျော်စွာ ပေါ်လာမှာဖြစ်ပြီး၊ "
-                    f"<code>/w</code>, <code>/waifu</code> or <code>/who</code> နဲ့ ဖော်ထုတ်ပြီး "
-                    f"<code>/fuck [name]</code> နဲ့ ဖမ်းယူနိုင်ပါတယ်။ ဖမ်းရမိတဲ့ Character တွေကို "
-                    f"<code>/harem</code> မှာ စုဆောင်းထားနိုင်ပါတယ်။\n\n"
-                    f"📌 <b>စတင်ကြည့်ရှုရန်:</b>\n"
-                    f"   • <code>/introduce</code> - ကျွန်တော် လုပ်ဆောင်ပေးနိုင်တာတွေ အသေးစိတ် ကြည့်ရန်\n"
-                    f"   • <code>/help</code> - Command အားလုံး ကြည့်ရန်\n\n"
-                    f"🎮 သင့် Group ကိုယ်ပိုင်မှာလည်း ဒီဂိမ်းကို ရစေချင်ရင် <b>@{bot_me.username}</b> ကို Add လုပ်ထားနိုင်ပါတယ်။\n\n"
-                    f"✨ ကောင်းသောအချိန်ဖြစ်ပါစေ။"
-                )
-                await bot1.send_message(chat.id, intro_msg, parse_mode='html')
-                await groups_col.update_one(
-                    {"chat_id": chat.id},
-                    {"$set": {"title": chat.title, "joined_at": datetime.now(TZ)}},
-                    upsert=True
-                )
                 return
         
         # ---------- WELCOME & GOODBYE ကို လုံးဝ ဖယ်ရှားမယ် ----------
         # အောက်က ကျန်တဲ့ welcome/goodbye code တွေအကုန်ကို ဖယ်ရှားလိုက်မယ်
         # ဘယ်သူမှ join/leave လုပ်ရင် ဘာမှ မပို့တော့ဘူး
+        return
         
     except Exception as e:
         await report_system_error("Welcome Goodbye Event", e)
-
-
-
 # ==========================================
 # SPAM FILTERS (Updated with spam mute)
 # ==========================================
@@ -6208,10 +6014,10 @@ async def catch_handler(event):
     # racer's own /obtain message, which meant onlookers could see (via the reply preview)
     # who was in the running before the result was ever revealed. Sent as a plain message now,
     # so nobody knows who's even attempting it until the final edit reveals the winner.
-    temp_msg = await bot1.send_message(chat_id, "⚡️")
+    temp_msg = await bot1.send_message(chat_id, "🐝")
     await asyncio.sleep(1.5)
     try:
-        await temp_msg.edit("💥")
+        await temp_msg.edit("🌸")
     except errors.MessageNotModifiedError:
         pass
     await asyncio.sleep(1)
@@ -6223,7 +6029,10 @@ async def _reply_already_caught(event, spawn_data):
     winner_id = (spawn_data or {}).get("claimed_by")
     if winner_id:
         mention = await get_html_mention(event, winner_id)
-        text = f"…too late. {mention} already made me theirs."
+        text = (
+            f"⟡ ᴛᴏᴏ ʟᴀᴛᴇ — ɪ'ᴠᴇ ᴀʟʀᴇᴀᴅʏ ʙᴇᴇɴ ꜰᴜᴄᴋᴇᴅ.\n"
+            f"🪼╰─ ʙʏ {mention} ─╯🪼"
+        )
     else:
         text = "❌ <b>…someone already claimed me.</b>"
     return await event.reply(text, parse_mode='html')
@@ -6408,16 +6217,19 @@ async def set_favorite_card(event):
     
     # ✅ Confirmation Buttons
     confirm_text = (
-        f"◈ <b>pick her as your favorite?</b>\n\n"
-        f"🦢 <b>Character:</b> <code>{card['name']}</code> (<code>{display_char_id(actual_char_id)}</code>)\n"
-        f" <b>Rarity:</b> {card.get('rarity', 'Unknown')}\n"
-        f"{artist_line(card)}\n"
-        f"…she'd be the one showing up in your /harem"
+        f"⟡ <b>FAVORITE SELECTION</b> ⟡\n\n"
+        f"🪽 <b>{card['name']}</b>\n"
+        f"⌁ <code>{display_char_id(actual_char_id)}</code>\n"
+        f"◆ {card.get('rarity', 'Unknown')}\n"
+        f"{artist_line(card)}\n\n"
+        f"╰─━━━━━━━─╯\n"
+        f"ᴍᴀʀᴋ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴀs ᴀ ғᴀᴠᴏʀɪᴛᴇ\n"
+        f"ᴀɴᴅ ᴋᴇᴇᴘ ɪᴛ ɪɴ ʏᴏᴜʀ /ʜᴀʀᴇᴍ."
     )
     buttons = [
         [
-            Button.inline("🤍 yes, her", data=f"fav_confirm_{user_id}_{actual_char_id}"),
-            Button.inline("…not yet", data=f"fav_cancel_{user_id}_{actual_char_id}")
+            Button.inline("⟡ ʏᴇᴘ", data=f"fav_confirm_{user_id}_{actual_char_id}"),
+            Button.inline("⟡ ɴᴏᴘᴇ", data=f"fav_cancel_{user_id}_{actual_char_id}")
         ]
     ]
     await event.reply(confirm_text, buttons=buttons, parse_mode='html') 
@@ -6613,12 +6425,12 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
     for card in db_chars:
         by_category[card.get("category") or "Unknown Series"].append(card)
     # 🎨 UI REDESIGN (matches catch_bot's own /harem layout): cards are grouped back under a
-    # per-category header — "☘️ <Anime> (<owned>/<total>)" then a dashed divider — with every
+    # per-category header — "🪻 <Anime> (<owned>/<total>)" then a dashed divider — with every
     # owned card underneath as its own single "<id> | <rarity emoji> | <name> [<event>] (xN)"
     # line. Groups are packed onto pages greedily; if a category's remaining cards don't fit
     # on the current page, its header is simply repeated at the top of the next page so every
     # page still reads correctly standalone.
-    CATEGORY_SEP = "⚋⚋⚋⚋⚋⚋⚋⚋"
+    CATEGORY_SEP = "༺━━━━༻"
     groups = []  # [(cat, owned_in_cat, total_in_cat, [(char_id, card_line), ...]), ...]
     for cat in sorted(by_category.keys(), key=lambda c: c.lower()):
         cat_cards = sorted(
@@ -6666,7 +6478,7 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
         current_page, current_len, current_page_ids = [], 0, []
 
     for cat, owned_in_cat, total_in_cat, cat_lines in groups:
-        header_len = utf16_len(f"☘️ {cat} ({owned_in_cat}/{total_in_cat})\n{CATEGORY_SEP}") + 1
+        header_len = utf16_len(f"🪻 {cat} ({owned_in_cat}/{total_in_cat})\n{CATEGORY_SEP}") + 1
         idx = 0
         while idx < len(cat_lines):
             fresh_on_page = (not current_page) or (current_page[-1][0] != cat)
@@ -6737,7 +6549,7 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
     n_groups = len(page_groups)
     for gi, (cat, owned_in_cat, total_in_cat, chunk) in enumerate(page_groups):
         if cat != prev_cat:
-            page_lines.append(f"☘️ {escape_html(cat)} (<code>{owned_in_cat}/{total_in_cat}</code>)")
+            page_lines.append(f"🪻 {escape_html(cat)} (<code>{owned_in_cat}/{total_in_cat}</code>)")
             page_lines.append(CATEGORY_SEP)
         for cid, line in chunk:
             rank = ranks_map.get(cid)
@@ -6762,15 +6574,15 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
     mention = f"<a href='tg://user?id={user_id}'><b>{escape_html(fullname)}</b></a>"
     output_text = f"{mention}'s {small_caps('Recent Characters')} - {small_caps('Page')}: <code>{page}/{total_pages}</code>\n"
     if rarity_filter:
-        output_text += f"🔍 <b>Filter:</b> {rarity_filter}\n"
+        output_text += f" <b>🦚Filter:</b> {rarity_filter}\n"
     output_text += "\n"
     for l in page_lines:
         output_text += l + "\n"
     output_text += "\n"
     if is_unlimited_vault:
-        output_text += f"👑Owner Mode"
+        output_text += f"⟡ ᴘʀᴇᴍɪᴜᴍ ᴏᴡɴᴇʀ ᴍᴏᴅᴇ ⟡"
     if rarity_filter:
-        output_text += f"\n<i>🔍 Filter active — use /hmode to change or clear.</i>"
+        output_text += f"\n<i>🦚Filter active — use /hmode to change or clear.</i>"
     buttons = []
     # 🩹 FIX: this used to be len(filtered_harem), so setting an /hmode rarity filter (e.g.
     # Blossom) made the button count drop to just that rarity's count (e.g. 10 instead of the
@@ -6790,9 +6602,9 @@ async def send_paginated_harem(client, chat_id, user_id, page=1, edit_msg_id=Non
     # to change or clear their filter; it's just no longer a button on every vault page.
     nav_buttons = []
     if page > 1:
-        nav_buttons.append(Button.inline("← Previous", data=f"harem_{page-1}_{user_id}_{viewer_id}"))
+        nav_buttons.append(Button.inline("⟪⟪⟪", data=f"harem_{page-1}_{user_id}_{viewer_id}"))
     if page < total_pages:
-        nav_buttons.append(Button.inline("Next ➡", data=f"harem_{page+1}_{user_id}_{viewer_id}"))
+        nav_buttons.append(Button.inline("⟫⟫⟫", data=f"harem_{page+1}_{user_id}_{viewer_id}"))
     if nav_buttons:
         buttons.append(nav_buttons)
     buttons.append([Button.switch_inline(f"Characters ⛩ ({total_cards})", query=f"harem.{user_id}", same_peer=True)])
@@ -7351,19 +7163,6 @@ async def unified_callback_handler(event):
         await event.answer()
 
     # ==========================================
-    # 🏆 Leaderboard tab/page switching
-    # ==========================================
-    elif action_type == "lb":
-        mode = data_parts[1]
-        page = int(data_parts[2])
-        text, buttons = await render_leaderboard_page(mode, page)
-        try:
-            await event.edit(text, parse_mode='html', buttons=buttons)
-        except Exception:
-            pass
-        await event.answer()
-
-    # ==========================================
     # ⭐ /fav confirm / cancel callbacks
     # ==========================================
     elif action_type == "fav":
@@ -7401,139 +7200,18 @@ async def unified_callback_handler(event):
                     for x in user_harem
                 )
             if not owns_card:
-                return await event.answer("❌ …she's not yours anymore.", alert=True)
+                return await event.answer("❌ …not yours anymore.", alert=True)
             await users_catcher_col.update_one({"user_id": target_user_id}, {"$set": {"fav_card": card["char_id"]}})
-            await event.answer("🤍 she's your favorite now~")
+            await event.answer("🤍your favorite now~")
             try:
                 await event.edit(
                     f"🍬 <b>{escape_html(card['name'])}</b> (<code>{display_char_id(card['char_id'])}</code>) ကို "
-                    f"favourite ကတ်အဖြစ် သတ်မှတ်လိုက်ပြီ! ✨ /harem မှာ ဒီကတ်ပေါ်လာမယ်။",
+                    f"favourite အဖြစ် သတ်မှတ်လိုက်ပြီ! ✨ /harem မှာ ဒီကတ်ပေါ်လာမယ်။",
                     parse_mode='html', buttons=None
                 )
             except Exception:
                 pass
             return
-# 🛡️ Guard Bot (bot3) has been merged into bot1, so all outgoing game messages (cardjoin,
-# hilo, etc.) are now sent by bot1 too — the @bot1.on(events.CallbackQuery) registration
-# above already covers every callback, no second registration needed.
-
-# ==========================================
-# 🏆 LEADERBOARD (Daily / All-Time, paginated)
-# ==========================================
-LEADERBOARD_PAGE_SIZE = 15
-LB_MEDALS = {0: "🥇", 1: "🥈", 2: "🥉"}
-
-async def render_leaderboard_page(mode, page):
-    """Generate leaderboard text and buttons for a given mode and page."""
-    today_str = datetime.now(TZ).strftime("%Y-%m-%d") if mode == "daily" else None
-    data = await get_cached_leaderboard(mode, today_str)
-    
-    total = len(data)
-    start = page * LEADERBOARD_PAGE_SIZE
-    page_rows = data[start:start + LEADERBOARD_PAGE_SIZE]
-    field_map = {"daily": "daily_catches", "all": "total_caught"}
-    title_map = {"daily": "📅 <b>Today's Top Catchers</b>", "all": "🏆 <b>All-Time Top Catchers</b>"}
-    field = field_map.get(mode, "total_caught")
-    title = title_map.get(mode, title_map["all"])
-    
-    if not page_rows:
-        body = "<i>Nobody's caught anything yet — be the first! 🐟</i>" if page == 0 else "<i>No more entries.</i>"
-    else:
-        lines = []
-        for i, row in enumerate(page_rows):
-            rank = start + i
-            medal = LB_MEDALS.get(rank, f"<code>#{rank + 1}</code>")
-            name = escape_html(clean_display_name(row.get("fullname"), fallback=f"User {row.get('user_id')}"))
-            val = row.get(field, 0)
-            lines.append(f"{medal}  {name} — <code>{val}</code>")
-        body = "\n".join(lines)
-    
-    text = f"{title}\n{body}"
-    
-    # Tab buttons
-    tab_rows = [
-        [
-            Button.inline(("🔘 " if mode == "daily" else "") + "📅 Daily", data="lb_daily_0"),
-            Button.inline(("🔘 " if mode == "all" else "") + "🏆 All-Time", data="lb_all_0")
-        ]
-    ]
-    
-    # Navigation buttons
-    nav_row = []
-    if page > 0:
-        nav_row.append(Button.inline("◀ Prev", data=f"lb_{mode}_{page - 1}"))
-    if start + LEADERBOARD_PAGE_SIZE < total:
-        nav_row.append(Button.inline("Next ▶", data=f"lb_{mode}_{page + 1}"))
-    
-    buttons = list(tab_rows)
-    if nav_row:
-        buttons.append(nav_row)
-    
-    return text, buttons
-
-@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](leaderboard|lb)(?:@\w+)?$', 'bot1')))
-async def leaderboard_handler(event):
-    """Handle /leaderboard and /lb commands."""
-    text, buttons = await render_leaderboard_page("all", 0)
-    await event.reply(text, parse_mode='html', buttons=buttons)
-
-# ---- Callback handler for leaderboard navigation ----
-@bot1.on(events.CallbackQuery(pattern=r'^lb_(daily|all)_(\d+)$'))
-async def leaderboard_callback_handler(event):
-    """Handle leaderboard page/tab switching via inline buttons."""
-    mode = event.pattern_match.group(1)  # "daily" or "all"
-    if isinstance(mode, bytes):
-        mode = mode.decode('utf-8')
-    page = int(event.pattern_match.group(2))
-    
-    text, buttons = await render_leaderboard_page(mode, page)
-    
-    try:
-        await event.edit(text, parse_mode='html', buttons=buttons)
-        await event.answer("✅ Updated!")
-    except errors.MessageNotModifiedError:
-        # Message content hasn't changed, just acknowledge the click
-        await event.answer()
-    except Exception as e:
-        await event.answer(f"❌ Error: {e}", alert=True)
-
-LEADERBOARD_CACHE_TTL = 60  # a full minute of staleness is fine for a top-50 board
-
-async def get_cached_leaderboard(mode, today_str=None):
-    """mode: 'daily' or 'all'. Leaderboard staleness of up to a minute is harmless, so this
-    caches the whole top-50 snapshot instead of hitting Mongo on every /leaderboard tap."""
-    cache_key = f"cache:leaderboard:{mode}:{today_str or 'x'}"
-    try:
-        cached = await redis_client.get(cache_key)
-        if cached:
-            return json.loads(cached)
-    except Exception as e:
-        print(f"⚠️ Redis leaderboard cache error: {e}")
-        # Redis မရရင် DB ကို တိုက်ရိုက်ရှာမယ်
-    
-    # Fetch from database
-    if mode == "daily":
-        today_start = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-        cursor = users_catcher_col.find(
-            {"last_catch_date": {"$gte": today_start}, "daily_catches": {"$gt": 0}},
-            {"_id": 0, "user_id": 1, "fullname": 1, "daily_catches": 1}
-        ).sort("daily_catches", -1).limit(50)
-    else:
-        cursor = users_catcher_col.find(
-            {"total_caught": {"$gt": 0}},
-            {"_id": 0, "user_id": 1, "fullname": 1, "total_caught": 1}
-        ).sort("total_caught", -1).limit(50)
-    
-    data = await cursor.to_list(length=50)
-    
-    # Try to cache it
-    try:
-        await redis_client.setex(cache_key, LEADERBOARD_CACHE_TTL, json.dumps(data, default=str))
-    except Exception as e:
-        print(f"⚠️ Redis leaderboard cache write error: {e}")
-    
-    return data
-
 # ==========================================
 # 📊 PROFILE
 # ==========================================
@@ -7724,21 +7402,6 @@ async def achievements_handler(event):
     await check_and_award_achievements(user_id)
     await send_achievements_page(bot1, event.chat_id, user_id, mention, page=1)
 
-# ==========================================
-# 🔗 REFERRAL
-# ==========================================
-@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]referral(?:@\w+)?$', 'bot1')))
-async def referral_info_handler(event):
-    user_id = event.sender_id
-    mention = await get_html_mention(event, user_id)
-    await ensure_user_registered(user_id, await get_plain_name(event, user_id))
-    user_doc = await users_catcher_col.find_one({"user_id": user_id})
-    ref_count = user_doc.get("referral_count", 0) if user_doc else 0
-    bot_me = await bot1.get_me()
-    ref_link = f"https://t.me/{bot_me.username}?start=ref_{user_id}"
-    msg = f"🔗 <b>YOUR REFERRAL LINK</b>\n⚡ ━━━━━━━━━━━━━━━ ⚡\nShare this link! Friends who join through it count toward your referral total.\n\n🔗 <code>{ref_link}</code>\n\n👥 <b>Total Invited:</b> <code>{ref_count} Friends</code>"
-    share_url = f"https://t.me/share/url?url={ref_link}&text=Join%20the%20Bot%20now!"
-    await event.reply(msg, parse_mode='html', buttons=[[Button.url("📤 Share Link", share_url)]])
 
 # ==========================================
 # 🔍 CHECK CHARACTER — styled to look IDENTICAL to catch_bot's own '.check <id>' DM reply
@@ -8148,24 +7811,14 @@ async def gift_asset_handler(event):
     if sender_id == receiver_id:
         return await event.reply("❌ <b>…can't gift yourself.</b>", parse_mode='html')
 
-    # 🩹 FIX (moved to gift_callback_handler below, per owner report): the 1000 USD gift fee
-    # used to be charged RIGHT HERE — before checking whether char_id even exists or the sender
-    # actually owns it. A typo'd/nonexistent char_id (e.g. /gift 21345), or trying to gift a
-    # card you don't have, still cost 1000 USD every single time, with zero refund — even
-    # hitting Cancel on the confirmation didn't give it back. It's now only charged once
-    # validation has passed AND the gift is confirmed.
     char_data = await characters_base_col.find_one({"char_id": char_id})
     if not char_data:
         return await event.reply("❌ <b>…I don't know anyone with that ID.</b>", parse_mode='html')
 
+    # Ownership check
     if sender_id == OWNER_ID:
-        pass  # 👑 unlimited vault — no ownership check needed, see gift_callback_handler
+        pass  # 👑 Unlimited vault
     elif sender_id in added_owner_ids:
-        # 👑 Added owner (see /addowner): gifts like the real owner does — ANY character,
-        # no real catch needed at all (char_data above already confirms it exists, that's
-        # enough) — the only difference from OWNER_ID is the ADDED_OWNER_GIFT_LIMIT_PER_CARD
-        # cap per card, tracked via added_owner_gift_count. See gift_callback_handler for
-        # where that quota is actually enforced/incremented.
         sender_doc = await users_catcher_col.find_one({"user_id": sender_id})
         gift_count_used = ((sender_doc or {}).get("added_owner_gift_count") or {}).get(char_id, 0)
         if gift_count_used >= ADDED_OWNER_GIFT_LIMIT_PER_CARD:
@@ -8181,18 +7834,25 @@ async def gift_asset_handler(event):
             return await event.reply(f"❌ <b>…she's not yours to give.</b>", parse_mode='html')
 
     r_mention = await get_html_mention(event, receiver_id)
+    
+    # ✅ သင်လိုချင်တဲ့ Confirm Text Format
     confirm_text = (
-        f"◈ <b>let her go?</b>\n\n"
-        f"🐇 <b>Character:</b> <code>{char_data['name']}</code> (<code>{display_char_id(char_id)}</code>)\n"
-        f"🦋 <b>Rarity:</b> {char_data.get('rarity', 'Unknown')}\n"
-        f"{artist_line(char_data)}"
-        f"🎯 <b>To:</b> {r_mention}\n\n"
-        f"…she'll belong to {r_mention} instead"
+        f"✦ ᴛʀᴀɴsғᴇʀ ᴘʀᴏᴛᴏᴄᴏʟ ✦\n\n"
+        f"╭ ᴄʜᴀʀᴀᴄᴛᴇʀ\n"
+        f"╰➤ {escape_html(char_data['name'])}\n\n"
+        f"╭ ʀᴀʀɪᴛʏ\n"
+        f"╰➤ {char_data.get('rarity', 'Unknown')}\n\n"
+        f"╭ ᴜɴɪᴠᴇʀsᴇ\n"
+        f"╰➤ {escape_html(char_data.get('category', 'Unknown'))}\n\n"
+        f"⌁ ʀᴇᴄɪᴘɪᴇɴᴛ: {r_mention}\n\n"
+        f"ᴏɴᴄᴇ ᴄᴏɴғɪʀᴍᴇᴅ, ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ "
+        f"ᴡɪʟʟ ʙᴇᴄᴏᴍᴇ ᴛʜᴇɪʀs."
     )
 
+    # ✅ မှန်ကန်တဲ့ Button Data
     buttons = [
         [
-            Button.inline("🤍 yes, send her", data=f"gift_confirm_{sender_id}_{receiver_id}_{char_id}"),
+            Button.inline("💎 Yepp", data=f"gift_confirm_{sender_id}_{receiver_id}_{char_id}"),
             Button.inline("…not yet", data=f"gift_cancel_{sender_id}_{receiver_id}_{char_id}")
         ]
     ]
@@ -8200,8 +7860,13 @@ async def gift_asset_handler(event):
     async def _send_gift_confirm(media):
         return await event.reply(confirm_text, file=media, buttons=buttons, parse_mode='html')
 
-    sent = await send_with_char_media(char_data["char_id"], char_data["storage_msg_id"], _send_gift_confirm)
-    if sent is None:
+    # ✅ Media ပြဿနာရှိရင်တောင် Button ပါတဲ့ Message ပို့ပေးမယ်
+    try:
+        sent = await send_with_char_media(char_data["char_id"], char_data["storage_msg_id"], _send_gift_confirm)
+        if sent is None:
+            await event.reply(confirm_text, buttons=buttons, parse_mode='html')
+    except Exception as e:
+        print(f"Gift media error: {e}")
         await event.reply(confirm_text, buttons=buttons, parse_mode='html')
 
 @bot1.on(events.CallbackQuery(pattern=r'^gift_(confirm|cancel)_(\d+)_(\d+)_([a-zA-Z0-9_]+)$'))
