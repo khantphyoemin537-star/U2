@@ -795,6 +795,11 @@ def utf16_len(s):
     live in the Unicode supplementary plane and take 2 UTF-16 units each (a surrogate pair),
     not 1 — plain len() undercounts those and can let a page slip past Telegram's real limit."""
     return len(s.encode('utf-16-le')) // 2
+def get_giver_title(total_gifted):
+    return _gift_title_for_count(total_gifted, GIFT_GIVER_TITLES)
+
+def get_receiver_title(total_gift_received):
+    return _gift_title_for_count(total_gift_received, GIFT_RECEIVER_TITLES)
 
 def generate_achievements():
     achievements = []
