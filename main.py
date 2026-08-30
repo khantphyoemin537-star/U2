@@ -4657,7 +4657,7 @@ CATCH_BOT_ID = 6157455819  # catch_bot's own Telegram user id — used below to 
 # ⚠️ OWNER: replace the value below with the actual chat_id you want ".check" run in (a
 # negative number for a group/supergroup, e.g. -1001234567890). Left equal to CATCH_BOT_ID
 # (DM) until you do — I don't have that chat_id to fill in for you.
-CATCHBOT_SYNC_CHAT_ID = CATCH_BOT_ID
+CATCHBOT_SYNC_CHAT_ID = -1003687515867
 SYNC_IN_PROGRESS = False   # 🚦 checked at the top of global_message_counter_handler — every
 # automatic spawn, in every group, is paused for as long as this is True. A 9999-ID sweep is
 # heavy on Mongo/Telegram/the userbot session all by itself; per owner request, nothing should
