@@ -653,32 +653,52 @@ def hamming_distance(hash_a, hash_b):
         return 999
 
 async def compute_phash_for_message(msg):
-    """Given a Telethon message with a photo or video, return a dHash string of the
-    image (or the video's thumbnail — we never download a full video, just its thumb)."""
-    # 🩹 DIAGNOSTICS: this used to print only the bare exception, with no way to tell WHICH
-    # message/character it was for or what kind of media tripped it up — so a character stuck
-    # permanently "not recognized" (photo_phash never gets set, see find_character_by_media)
-    # was a dead end to debug. Now every failure logs msg_id + media kind + exception TYPE, so
-    # /rehashall's "couldn't re-fetch media for: <names>" list can actually be traced back to a
-    # root cause (e.g. a video with no embedded thumbnail, or a sticker format PIL can't open)
-    # instead of staying a mystery.
+    # 1️⃣ file_unique_id ကို ယူပါ (media မရှိရင် None ပြန်ပါ)
+    if not msg or not msg.media:
+        return None
+    file_unique_id = getattr(msg.media, 'file_unique_id', None)
+    
+    # 2️⃣ Cache ထဲ ရှိလား စစ်ပါ (မှန်ရင် ချက်ချင်းပြန်ပေး)
+    if file_unique_id:
+        cached = _PHASH_CACHE.get(file_unique_id)
+        if cached and time.time() - cached[1] < PHASH_CACHE_TTL:
+            print(f"✅ Cache hit for {file_unique_id[:10]}...")  # (optional log)
+            return cached[0]
+    
+    # 3️⃣ Cache မှာ မရှိရင် download ဆွဲပါ (timeout ထည့်ပါ)
     media_kind = "photo" if msg.photo else "video" if msg.video else "document" if msg.document else "none"
     try:
         if msg.photo:
-            media_bytes = await msg.download_media(file=bytes)
+            # 5 စက္ကန့်ထက် ကြာရင် timeout ဖြစ်ပြီး None ပြန်ပေး
+            media_bytes = await asyncio.wait_for(msg.download_media(file=bytes), timeout=5.0)
         elif msg.video or msg.document:
-            media_bytes = await msg.download_media(thumb=-1, file=bytes)
+            media_bytes = await asyncio.wait_for(msg.download_media(thumb=-1, file=bytes), timeout=5.0)
         else:
             return None
-        if not media_bytes:
-            print(f"compute_phash_for_message: empty download (msg_id={getattr(msg, 'id', '?')}, kind={media_kind}) — "
-                  f"likely no embedded thumbnail to fetch.")
-            return None
-        result = compute_dhash(media_bytes)
-        if not result:
-            print(f"compute_phash_for_message: dHash failed to decode (msg_id={getattr(msg, 'id', '?')}, kind={media_kind}) — "
-                  f"see compute_dhash error above for the PIL exception.")
-        return result
+    except asyncio.TimeoutError:
+        print(f"⏰ Download timeout for msg {msg.id} ({media_kind})")
+        return None
+    except Exception as e:
+        print(f"❌ Download error for msg {msg.id}: {e}")
+        return None
+    
+    if not media_bytes:
+        return None
+    
+    # 4️⃣ Hash တွက်ပါ
+    result = compute_dhash(media_bytes)
+    
+    # 5️⃣ တွက်ပြီးသား hash ကို Cache ထဲ သိမ်းပါ
+    if file_unique_id and result:
+        _PHASH_CACHE[file_unique_id] = (result, time.time())
+        # Cache ကြီးလွန်းရင် သန့်ရှင်းပါ (optional)
+        if len(_PHASH_CACHE) > 1000:
+            cutoff = time.time() - PHASH_CACHE_TTL
+            for key, (_, ts) in list(_PHASH_CACHE.items()):
+                if ts < cutoff:
+                    del _PHASH_CACHE[key]
+    
+    return result
     except Exception as e:
         print(f"compute_phash_for_message error (msg_id={getattr(msg, 'id', '?')}, kind={media_kind}): {type(e).__name__}: {e}")
         return None
@@ -1206,7 +1226,11 @@ async def get_category_totals_cached():
 # actually fits the architecture.
 _CHAR_PHOTO_CACHE = {}  # char_id -> (media_object, cached_at)
 CHAR_PHOTO_CACHE_TTL = 3600  # 1 hour — cleared early anyway by invalidate_character_caches()
-
+# ==========================================
+# 📸 PHASH CACHE (avoid re-downloading the same media)
+# ==========================================
+_PHASH_CACHE = {}  # file_unique_id -> (phash, timestamp)
+PHASH_CACHE_TTL = 3600  # 1 hour (ထပ်ခါထပ်ခါ download မဆွဲရအောင်)
 async def get_char_display_media(client, char_id, storage_msg_id):
     """Cached wrapper around client.get_messages(SPECIFIC_CONTROL_GROUP, ids=storage_msg_id)
     for a character's stored photo. Returns the media object, or None if it can't be fetched."""
@@ -4964,59 +4988,54 @@ async def store_character_from_check(info: dict, reply_msg) -> str:
     await invalidate_character_caches()
     return outcome
 
+
 async def _check_one_catchbot_id(char_num: int) -> str:
-    """Sends '.check <char_num>' to catch_bot (DM, via monitor_userbot) and waits for its
-    reply. A fresh conversation() is opened per id rather than one held open for the whole
-    1..9999 run — simpler to reason about, sidesteps Conversation's max_messages ceiling over
-    a run this long, and makes the cooldown-retry loop below trivial (just re-enter).
-    Returns one of:
-        'imported' / 'updated' — see store_character_from_check
-        'miss'    — no reply within CATCHBOT_SYNC_REPLY_TIMEOUT, or the reply wasn't a valid
-                    character card at all (catch_bot has nothing at this id)
-        'error'   — unexpected exception; already reported to the owner"""
     for attempt in range(CATCHBOT_SYNC_COOLDOWN_MAX_RETRIES + 1):
         try:
-            async with monitor_userbot.conversation(CATCH_BOT_ID, timeout=CATCHBOT_SYNC_REPLY_TIMEOUT) as conv:
-                while True:
-                    try:
-                        await conv.send_message(f".check {char_num}")
+            # 1) Send .check message
+            await monitor_userbot.send_message(CATCH_BOT_ID, f".check {char_num}")
+            # 2) Wait for a reply (any message from catch_bot)
+            start = time.time()
+            last_sent_msg = None
+            # Get the ID of the message we just sent to ignore it
+            sent_msgs = await monitor_userbot.get_messages(CATCH_BOT_ID, limit=1)
+            if sent_msgs:
+                last_sent_msg = sent_msgs[0]
+                sent_id = last_sent_msg.id
+            else:
+                sent_id = 0
+
+            reply = None
+            while time.time() - start < CATCHBOT_SYNC_REPLY_TIMEOUT:
+                # Get the latest message from catch_bot
+                msgs = await monitor_userbot.get_messages(CATCH_BOT_ID, limit=1)
+                if msgs:
+                    msg = msgs[0]
+                    # If the message is from catch_bot and is newer than our sent message
+                    if msg.sender_id == CATCH_BOT_ID and msg.id > sent_id:
+                        reply = msg
                         break
-                    except FloodWaitError as e:
-                        print(f"⏳ [catchbot sync] FloodWait sending .check {char_num}: sleeping {e.seconds}s...")
-                        await asyncio.sleep(e.seconds + 1)
-                try:
-                    reply = await conv.get_response()
-                except asyncio.TimeoutError:
-                    return "miss"
+                await asyncio.sleep(1)
+
+            if not reply:
+                return "miss"
+
             caption = reply.raw_text or ""
             info = parse_catchbot_check(caption)
             if not info:
                 if any(hint in caption.lower() for hint in CATCHBOT_SYNC_COOLDOWN_HINTS):
-                    print(f"⏳ [catchbot sync] cooldown-looking reply at id {char_num} "
-                          f"(attempt {attempt + 1}) — backing off {CATCHBOT_SYNC_COOLDOWN_BACKOFF}s and retrying.")
+                    print(f"⏳ [catchbot sync] cooldown at id {char_num}, retry {attempt+1}")
                     await asyncio.sleep(CATCHBOT_SYNC_COOLDOWN_BACKOFF)
-                    continue  # retry the SAME id — it was never actually checked
+                    continue
                 return "miss"
             if not (reply.photo or reply.video or reply.document):
-                await report_system_error(
-                    "_check_one_catchbot_id",
-                    f"id {char_num}: parsed a valid check reply but it carried no media — skipped."
-                )
+                await report_system_error("_check_one_catchbot_id", f"id {char_num}: parsed but no media")
                 return "error"
             return await store_character_from_check(info, reply)
         except Exception as e:
             await report_system_error("_check_one_catchbot_id", f"id {char_num}: {e}")
             return "error"
-    return "miss"  # exhausted retries and it still looked like a cooldown every time — move on
-
-def _catchbot_sync_counts_lines(counts: dict) -> str:
-    return (
-        f"📨 Checked: {counts.get('checked', 0)}\n"
-        f"🆕 Imported: {counts.get('imported', 0)}\n"
-        f"🔄 Updated: {counts.get('updated', 0)}\n"
-        f"➖ No character at id: {counts.get('misses', 0)}\n"
-        f"⚠️ Errors: {counts.get('errors', 0)}"
-    )
+    return "miss"
 
 async def _run_catchbot_sync(start_id: int, status_chat_id=None, status_msg_id=None):
     """The actual 1..9999 sweep. Resumable (checkpointed to bot_settings_col after every id,
