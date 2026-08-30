@@ -653,54 +653,48 @@ def hamming_distance(hash_a, hash_b):
         return 999
 
 async def compute_phash_for_message(msg):
-    # 1️⃣ file_unique_id ကို ယူပါ (media မရှိရင် None ပြန်ပါ)
-    if not msg or not msg.media:
-        return None
-    file_unique_id = getattr(msg.media, 'file_unique_id', None)
-    
-    # 2️⃣ Cache ထဲ ရှိလား စစ်ပါ (မှန်ရင် ချက်ချင်းပြန်ပေး)
-    if file_unique_id:
-        cached = _PHASH_CACHE.get(file_unique_id)
-        if cached and time.time() - cached[1] < PHASH_CACHE_TTL:
-            print(f"✅ Cache hit for {file_unique_id[:10]}...")  # (optional log)
-            return cached[0]
-    
-    # 3️⃣ Cache မှာ မရှိရင် download ဆွဲပါ (timeout ထည့်ပါ)
-    media_kind = "photo" if msg.photo else "video" if msg.video else "document" if msg.document else "none"
     try:
-        if msg.photo:
-            # 5 စက္ကန့်ထက် ကြာရင် timeout ဖြစ်ပြီး None ပြန်ပေး
-            media_bytes = await asyncio.wait_for(msg.download_media(file=bytes), timeout=5.0)
-        elif msg.video or msg.document:
-            media_bytes = await asyncio.wait_for(msg.download_media(thumb=-1, file=bytes), timeout=5.0)
-        else:
+        if not msg or not msg.media:
             return None
-    except asyncio.TimeoutError:
-        print(f"⏰ Download timeout for msg {msg.id} ({media_kind})")
-        return None
+        file_unique_id = getattr(msg.media, 'file_unique_id', None)
+        
+        # Cache hit?
+        if file_unique_id:
+            cached = _PHASH_CACHE.get(file_unique_id)
+            if cached and time.time() - cached[1] < PHASH_CACHE_TTL:
+                return cached[0]
+        
+        media_kind = "photo" if msg.photo else "video" if msg.video else "document" if msg.document else "none"
+        try:
+            if msg.photo:
+                media_bytes = await asyncio.wait_for(msg.download_media(file=bytes), timeout=5.0)
+            elif msg.video or msg.document:
+                media_bytes = await asyncio.wait_for(msg.download_media(thumb=-1, file=bytes), timeout=5.0)
+            else:
+                return None
+        except asyncio.TimeoutError:
+            print(f"⏰ Download timeout for msg {msg.id} ({media_kind})")
+            return None
+        except Exception as e:
+            print(f"❌ Download error for msg {msg.id}: {e}")
+            return None
+        
+        if not media_bytes:
+            return None
+        
+        result = compute_dhash(media_bytes)
+        
+        if file_unique_id and result:
+            _PHASH_CACHE[file_unique_id] = (result, time.time())
+            if len(_PHASH_CACHE) > 1000:
+                cutoff = time.time() - PHASH_CACHE_TTL
+                for key, (_, ts) in list(_PHASH_CACHE.items()):
+                    if ts < cutoff:
+                        del _PHASH_CACHE[key]
+        
+        return result
     except Exception as e:
-        print(f"❌ Download error for msg {msg.id}: {e}")
-        return None
-    
-    if not media_bytes:
-        return None
-    
-    # 4️⃣ Hash တွက်ပါ
-    result = compute_dhash(media_bytes)
-    
-    # 5️⃣ တွက်ပြီးသား hash ကို Cache ထဲ သိမ်းပါ
-    if file_unique_id and result:
-        _PHASH_CACHE[file_unique_id] = (result, time.time())
-        # Cache ကြီးလွန်းရင် သန့်ရှင်းပါ (optional)
-        if len(_PHASH_CACHE) > 1000:
-            cutoff = time.time() - PHASH_CACHE_TTL
-            for key, (_, ts) in list(_PHASH_CACHE.items()):
-                if ts < cutoff:
-                    del _PHASH_CACHE[key]
-    
-    return result
-    except Exception as e:
-        print(f"compute_phash_for_message error (msg_id={getattr(msg, 'id', '?')}, kind={media_kind}): {type(e).__name__}: {e}")
+        print(f"compute_phash_for_message error (msg_id={getattr(msg, 'id', '?')}): {e}")
         return None
 
 def classify_rarity(rarity_str):
