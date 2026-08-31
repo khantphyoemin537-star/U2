@@ -3395,7 +3395,7 @@ async def add_quiz_handler(event):
 # ==========================================
 IDENTIFY_HAMMING_THRESHOLD = 40  # lower = stricter match. 0-256 possible now that PHASH_SIZE=16.
 IDENTIFY_COOLDOWN_SECONDS = 1  # per-user, so repeated attempts don't spam replies
-MEDIA_IDENTIFY_CACHE_TTL = 604800  # 7 days — see get_media_identity_key/find_character_by_media below
+MEDIA_IDENTIFY_CACHE_TTL = 250000 # 7 days — see get_media_identity_key/find_character_by_media below
 _MEDIA_ID_CACHE = {}  # media_key -> (char_id_or_None, cached_at)
 
 def get_media_identity_key(media_msg):
@@ -3593,8 +3593,8 @@ async def who_reveal_handler(event):
                     buttons = types.ReplyInlineMarkup(rows=[
                         types.KeyboardButtonRow(buttons=[
                             types.KeyboardButtonCopy(
-                                text=f"🤍 it's me, {char_name}",
-                                copy_text=f"/Ifuck {char_name}"
+                                text=f"/TwT",
+                                copy_text=f"/TwT {char_name}"
                             ),
                             types.KeyboardButtonCopy(
                                 text="/catch",
@@ -5968,7 +5968,7 @@ CATCH_USAGE_TEXT = (
 # in reveal messages. /catch and /Ifuck claim the exact same spawn the exact same way, so both
 # copy-buttons the bot shows (see who_reveal_handler / _identify_media_and_reply) actually work.
 # 🩹 CHANGED (per owner request): /fuck renamed to /Ifuck — same trigger, same behavior, new name.
-@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](?:morgan|Ifuck|catch)(?:@\w+)?\s+(.*)$', 'bot1')))
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](?:morgan|TwT|catch)(?:@\w+)?\s+(.*)$', 'bot1')))
 async def catch_handler(event):
     if event.is_private: return
     user_id = event.sender_id
