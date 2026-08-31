@@ -3103,7 +3103,7 @@ async def release_spawn(chat_id, chosen_char):
         # REPLY to this exact message, and that there's a second /Ifuck step after that.
         spawn_lines = [
             "❓ ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃",
-            "ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /Ifuck [ɴᴀᴍᴇ].."
+            "ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /TwT [ɴᴀᴍᴇ].."
         ]
         artist_credit = artist_line(artist_raw, prefix="\n", suffix="")
         if artist_credit:
