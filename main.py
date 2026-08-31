@@ -2918,6 +2918,53 @@ async def broadcast(event):
         except Exception: fail += 1
     await status_msg.edit(bq(f"<b>BROADCAST COMPLETE</b>\n✅ <b>Success:</b> <code>{success}</code>\n❌ <b>Failed:</b> None"), parse_mode='html')
 
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]joinpublic(?:@\w+)?\s+(\S+)$', 'bot1')))
+async def join_public_channel(event):
+    """Owner-only: joins a PUBLIC channel using its @username, without an invite link."""
+    if event.sender_id != OWNER_ID:
+        return
+    if not event.is_private:
+        return await event.reply("❌ Use this in DM for safety.", parse_mode='html')
+
+    username = event.pattern_match.group(1).strip()
+    if not username.startswith('@'):
+        username = '@' + username
+
+    status = await event.reply(f"⏳ Resolving <code>{username}</code> and joining with all workers...", parse_mode='html')
+
+    # Resolve the entity (public channels can be resolved by anyone)
+    try:
+        entity = await bot1.get_entity(username)
+    except Exception as e:
+        return await status.edit(f"❌ Failed to resolve <code>{username}</code>: <code>{escape_html(str(e))}</code>", parse_mode='html')
+
+    # Check if workers are loaded
+    if not worker_pool_clients:
+        return await status.edit("❌ No worker pool loaded. Run <code>/xbotloadworkers</code> first.", parse_mode='html')
+
+    joined = 0
+    total = len(worker_pool_clients)
+    
+    from telethon.tl.functions.channels import JoinChannelRequest
+    from telethon.errors.rpcerrorlist import UserAlreadyParticipantError
+
+    for i, (client, label) in enumerate(worker_pool_clients):
+        try:
+            await client(JoinChannelRequest(entity))
+            joined += 1
+            await asyncio.sleep(0.3)  # Pace to avoid flood
+        except UserAlreadyParticipantError:
+            joined += 1  # Already inside, count as success
+        except Exception as e:
+            print(f"⚠️ Join error for {label}: {e}")
+            # Continue to the next worker
+    
+    await status.edit(
+        f"✅ Done! Sent join requests to <code>{joined}/{total}</code> workers for <code>{username}</code>.\n"
+        f"Now run <code>/xbotresync</code> or <code>/xbotimportall</code> again.",
+        parse_mode='html'
+    )
+
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.](fspawn|haii)(?:@\w+)?$', 'bot1')))
 async def force_spawn_by_owner(event):
     if event.sender_id != OWNER_ID: return
