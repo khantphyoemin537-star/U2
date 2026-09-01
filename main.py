@@ -2504,7 +2504,46 @@ async def delete_character_by_owner(event):
         await event.reply(f"🔥 {f('DATABASE REMOVED')}\n🆔 {f('Character ID')}: {char_id}\nStatus: Deleted.")
     else:
         await event.reply(f"❌ No character found with ID `{char_id}`.")
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]workerping(?:@\w+)?$', 'bot1')))
+async def worker_ping_command(event):
+    """Owner-only: Check if all loaded worker clients are still alive/connected."""
+    if event.sender_id != OWNER_ID:
+        return
+    if not event.is_private:
+        return await event.reply("❌ Use this in DM for better visibility.", parse_mode='html')
 
+    if not worker_pool_clients:
+        return await event.reply("❌ No workers loaded. Run <code>/xbotloadworkers</code> first.", parse_mode='html')
+
+    status_msg = await event.reply(f"⏳ Pinging {len(worker_pool_clients)} workers...", parse_mode='html')
+    
+    results = []
+    alive = 0
+    dead = 0
+
+    for i, (client, label) in enumerate(worker_pool_clients):
+        try:
+            # Check if the client is physically connected
+            if not client.is_connected():
+                await client.connect()
+            
+            # Try to get the current user (this verifies the session is still valid)
+            me = await client.get_me()
+            username = f"@{me.username}" if me.username else f"ID {me.id}"
+            results.append(f"✅ Worker {i+1} ({label}) is <b>ALIVE</b> ({username})")
+            alive += 1
+        except Exception as e:
+            results.append(f"❌ Worker {i+1} ({label}) is <b>DEAD</b> / Disconnected (<code>{escape_html(str(e)[:50])}</code>)")
+            dead += 1
+
+    # Summary
+    summary = f"📊 <b>Worker Pool Status</b>\n"
+    summary += f"🟢 Alive: <code>{alive}</code>\n"
+    summary += f"🔴 Dead/Error: <code>{dead}</code>\n"
+    summary += f"━━━━━━━━━━━━━━━━\n"
+    summary += "\n".join(results)
+
+    await status_msg.edit(summary, parse_mode='html')
 # ---- EDIT CHARACTER ----
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]editchar(?:@\w+)?(?:\s+(\S+))?$', 'bot1')))
 async def edit_character_prompt(event):
