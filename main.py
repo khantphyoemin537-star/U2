@@ -4935,6 +4935,212 @@ async def sync_from_catch_cancel_command(event):
         f"~{CATCHBOT_SYNC_REPLY_TIMEOUT}s) and then stop — the checkpoint is saved, so "
         "/syncfromcatch will resume from here next time you run it. Spawns resume immediately once it stops."
     )
+# ==========================================
+# 🔁 PARALLEL SYNC FROM CATCH_BOT (UPGRADED)
+# ==========================================
+# ဒီ Command က powerranger_col အကုန်လုံးကို သုံးပြီး .check 1 to 9999 ကို အပြိုင်လုပ်ပေးမယ်။
+# Warm-up အနေနဲ့ /start ကို ဦးစွာပို့ပေးမယ်။
+
+CATCHBOT_SYNC_PARALLEL_MAX_ID = 9999
+CATCHBOT_SYNC_PARALLEL_DELAY = 1.5  # Worker တစ်ခုချင်းစီရဲ့ .check ကြားကာလ
+
+async def _catchbot_worker_parallel(client, label, start_id, end_id, status_msg, shared_stats):
+    """Worker task: send .check for a range of IDs."""
+    # ----- WARM-UP PHASE (အရင်ဆုံး စာပို့မယ်) -----
+    try:
+        # catch_bot ကို /start ပို့ပြီး နှုတ်ဆက်မယ် (ဒါမှ error မတက်ဘူး)
+        await client.send_message(CATCHBOT_SYNC_CHAT_ID, "/start")
+        await asyncio.sleep(1.5)  # ခဏစောင့်ပြီးမှ စစ်မယ်
+    except Exception as e:
+        print(f"⚠️ Warm-up failed for {label}: {e}")
+        # Warm-up မအောင်မြင်ရင်တောင် ဆက်လုပ်မယ် (တစ်ခါတစ်ရံ မလိုဘူး)
+    
+    consecutive_misses = 0
+    for char_num in range(start_id, end_id + 1):
+        if shared_stats.get("cancel", False):
+            break
+        
+        try:
+            # Conversation ဖွင့်ပြီး .check ပို့မယ်
+            async with client.conversation(CATCHBOT_SYNC_CHAT_ID, timeout=20) as conv:
+                await conv.send_message(f".check {char_num}")
+                
+                # catch_bot ရဲ့ အဖြေကိုစောင့်မယ် (အခြား message တွေကို ignore)
+                reply = None
+                while True:
+                    try:
+                        msg = await conv.get_response(timeout=20)
+                        if msg.sender_id == CATCH_BOT_ID:
+                            reply = msg
+                            break
+                    except asyncio.TimeoutError:
+                        break
+                
+                if not reply:
+                    consecutive_misses += 1
+                    shared_stats["misses"] += 1
+                else:
+                    # parse လုပ်မယ်
+                    info = parse_catchbot_check(reply.raw_text or "")
+                    if info:
+                        # Media ရှိမရှိစစ်မယ်
+                        if not (reply.photo or reply.video or reply.document):
+                            shared_stats["errors"] += 1
+                        else:
+                            # 📥 Media ကို Storage Group ထဲ သိမ်းမယ် (ဒီ Worker ရဲ့ session နဲ့ပဲ)
+                            try:
+                                stored_msg = await client.send_message(
+                                    SPECIFIC_CONTROL_GROUP,
+                                    "",
+                                    file=reply.media
+                                )
+                                storage_id = stored_msg.id
+                                photo_phash = await compute_phash_for_message(reply)
+                                
+                                # DB ထဲ သိမ်းမယ် (store_character_from_check ကို ပြန်သုံးမယ်)
+                                # ဒါပေမယ့် store_character_from_check က monitor_userbot ကိုသုံးတယ်
+                                # ဒါကြောင့် ဒီမှာ တိုက်ရိုက် save လုပ်မယ်
+                                char_id = f"BOD{info['id']}"
+                                rarity_num = map_catch_bot_rarity(info["rarity_raw"])
+                                if not rarity_num:
+                                    rarity_num = str(len(RARITY_TIERS))  # default to Common
+                                r_info = RARITY_NUM_MAP[rarity_num]
+                                
+                                existing = await characters_base_col.find_one({"char_id": char_id})
+                                character_data = {
+                                    "char_id": char_id,
+                                    "name": info["name"],
+                                    "name_normalized": _normalize_catchbot_name(info["name"]),
+                                    "category": info["category"],
+                                    "rarity": r_info["name"],
+                                    "rarity_tier": classify_rarity(r_info["name"]),
+                                    "storage_msg_id": storage_id,
+                                    "currency_value": r_info["value"],
+                                    "event": info["event"] or "General",
+                                    "photo_phash": photo_phash,
+                                    "auto_imported_from": "catch_bot",
+                                    "source_rarity": info["rarity_raw"],
+                                    "synced_via_check": True,
+                                    "last_synced_at": time.time()
+                                }
+                                if existing:
+                                    await characters_base_col.update_one({"char_id": char_id}, {"$set": character_data})
+                                    shared_stats["updated"] += 1
+                                else:
+                                    character_data["spawn_count"] = 0
+                                    character_data["spawn_limit"] = 0
+                                    character_data["created_at"] = time.time()
+                                    await characters_base_col.insert_one(character_data)
+                                    shared_stats["imported"] += 1
+                                
+                                await invalidate_character_caches()
+                                consecutive_misses = 0  # reset
+                                
+                            except Exception as e:
+                                print(f"⚠️ Storage error for {char_id}: {e}")
+                                shared_stats["errors"] += 1
+                    else:
+                        # cooldown စာလား စစ်မယ်
+                        if any(hint in (reply.raw_text or "").lower() for hint in CATCHBOT_SYNC_COOLDOWN_HINTS):
+                            print(f"⏳ Cooldown for {label} at {char_num}, waiting...")
+                            await asyncio.sleep(CATCHBOT_SYNC_COOLDOWN_BACKOFF)
+                            # retry လုပ်ဖို့ char_num ကို တစ်ခါပြန်ရှေ့သွား
+                            char_num -= 1
+                            continue
+                        consecutive_misses += 1
+                        shared_stats["misses"] += 1
+
+        except Exception as e:
+            print(f"❌ Worker {label} error at {char_num}: {e}")
+            shared_stats["errors"] += 1
+            await asyncio.sleep(2)
+        
+        shared_stats["checked"] += 1
+        
+        # Pacing
+        await asyncio.sleep(CATCHBOT_SYNC_PARALLEL_DELAY)
+        
+        # Status update (ပုံမှန် update လုပ်မယ်)
+        if shared_stats["checked"] % 10 == 0:
+            try:
+                await status_msg.edit(
+                    f"⏳ <b>Parallel Sync</b> (Workers: {shared_stats.get('total_workers', '?')})\n"
+                    f"📨 Checked: <code>{shared_stats['checked']}</code>\n"
+                    f"🆕 Imported: <code>{shared_stats['imported']}</code>\n"
+                    f"🔄 Updated: <code>{shared_stats['updated']}</code>\n"
+                    f"➖ Misses: <code>{shared_stats['misses']}</code>\n"
+                    f"⚠️ Errors: <code>{shared_stats['errors']}</code>",
+                    parse_mode='html'
+                )
+            except:
+                pass
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]syncfromcatch_parallel(?:\s+(\d+))?$', 'bot1')))
+async def sync_from_catch_parallel_command(event):
+    if event.sender_id != OWNER_ID:
+        return
+    if not event.is_private:
+        return await event.reply("❌ Use this in DM to avoid clutter.", parse_mode='html')
+    
+    num_workers = int(event.pattern_match.group(1)) if event.pattern_match.group(1) else None
+    
+    # Worker pool ရှိမရှိစစ်မယ်
+    workers = worker_pool_clients.copy()
+    if not workers:
+        return await event.reply("❌ No workers loaded. Run <code>/xbotloadworkers</code> first.", parse_mode='html')
+    
+    if num_workers and num_workers > len(workers):
+        return await event.reply(f"⚠️ Only {len(workers)} workers available. Using all of them.", parse_mode='html')
+    
+    if not num_workers:
+        num_workers = len(workers)
+    else:
+        num_workers = min(num_workers, len(workers))
+    
+    # Workers ကို ရွေးမယ်
+    selected_workers = workers[:num_workers]
+    
+    # Range ခွဲမယ် (1 to 9999)
+    total_ids = CATCHBOT_SYNC_PARALLEL_MAX_ID
+    chunk_size = total_ids // num_workers
+    ranges = []
+    for i in range(num_workers):
+        start = 1 + i * chunk_size
+        end = 1 + (i + 1) * chunk_size - 1 if i < num_workers - 1 else total_ids
+        if start <= end:
+            ranges.append((start, end))
+    
+    status_msg = await event.reply(
+        f"⏳ <b>Starting Parallel Sync</b> with {num_workers} workers...\n"
+        f"Warm-up phase: Sending /start to catch_bot for each worker first.",
+        parse_mode='html'
+    )
+    
+    # Shared stats
+    shared_stats = {
+        "checked": 0, "imported": 0, "updated": 0, "misses": 0, "errors": 0,
+        "total_workers": num_workers, "cancel": False
+    }
+    
+    # Workers တွေကို စတင်ခိုင်းမယ်
+    tasks = []
+    for i, (client, label) in enumerate(selected_workers):
+        start_id, end_id = ranges[i]
+        tasks.append(_catchbot_worker_parallel(client, label, start_id, end_id, status_msg, shared_stats))
+        await asyncio.sleep(1)  # Stagger start to prevent global flood
+    
+    await asyncio.gather(*tasks)
+    
+    # ပြီးဆုံးချိန်
+    await status_msg.edit(
+        f"✅ <b>Parallel Sync Complete!</b> ({num_workers} workers)\n"
+        f"📨 Checked: <code>{shared_stats['checked']}</code>\n"
+        f"🆕 Imported: <code>{shared_stats['imported']}</code>\n"
+        f"🔄 Updated: <code>{shared_stats['updated']}</code>\n"
+        f"➖ Misses: <code>{shared_stats['misses']}</code>\n"
+        f"⚠️ Errors: <code>{shared_stats['errors']}</code>",
+        parse_mode='html'
+    )
 
 # =========================================================
 # 🔖 /migrateoldaddchar — owner-only, re-IDs old manually-/addchar'd characters onto a
