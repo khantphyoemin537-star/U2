@@ -1191,78 +1191,6 @@ def parse_cnft_forward(caption):
         return None
     return {"anime": anime, "name": name, "group_id": group_id, "tier_letters": tier_letters, "rarity_tier": rarity_tier}
 
-@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]addspecial(?:@\w+)?$', 'bot1')))
-async def addspecial_toggle_command(event):
-    global _addspecial_armed
-    if event.sender_id != OWNER_ID: return
-    _addspecial_armed = not _addspecial_armed
-    if _addspecial_armed:
-        await event.reply(
-            "🔫 <b>/addspecial armed.</b> Forward each CNFT card announcement (media + caption) "
-            "to this DM now, one at a time — every one recognized gets added automatically with "
-            "<code>spawnable: false</code> (manual distribution only, never a random spawn). "
-            "Send /addspecial again when you're done.",
-            parse_mode='html'
-        )
-    else:
-        await event.reply("🛑 <b>/addspecial disarmed.</b> Forwards are back to being ignored.", parse_mode='html')
-
-@bot1.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id == OWNER_ID and _addspecial_armed))
-async def addspecial_ingest_handler(event):
-    if is_duplicate_event(event): return
-    parsed = parse_cnft_forward(event.raw_text or "")
-    if not parsed:
-        return  # armed, but this particular DM doesn't look like a CNFT announcement — ignore silently
-    if not (event.photo or event.video or event.document):
-        return await event.reply("⚠️ Recognized a CNFT caption but no media is attached — skipped.", parse_mode='html')
-    char_id = f"CNFT{parsed['group_id']}{parsed['tier_letters']}"
-    if await characters_base_col.find_one({"char_id": char_id}):
-        return await event.reply(f"⚠️ <code>{char_id}</code> already exists — skipped (forwarded twice?).", parse_mode='html')
-    try:
-        forwarded_msg = await send_safe_message(bot1, SPECIFIC_CONTROL_GROUP, "", file=event.media)
-        prewarm_media_identity_cache(forwarded_msg, char_id)
-        photo_phash = await compute_phash_for_message(event)
-        rarity_tier = parsed["rarity_tier"]
-        character_data = {
-            "char_id": char_id,
-            "name": parsed["name"],
-            "category": parsed["anime"],
-            "rarity": f"{RARITY_EMOJI[rarity_tier]} {rarity_tier}",
-            "rarity_tier": rarity_tier,
-            "storage_msg_id": forwarded_msg.id,
-            "currency_value": _RARITY_VALUE_MAP[rarity_tier],
-            "spawn_count": 0,
-            "event": "General",
-            "spawn_limit": 0,
-            "spawnable": False,  # 🔑 excluded from trigger_dynamic_spawn's eligible_characters — manual distribution only
-            "photo_phash": photo_phash,
-            "created_at": time.time()
-        }
-        await characters_base_col.insert_one(character_data)
-        await invalidate_character_caches()
-        channel_note = ""
-        if CHARACTER_CHANNEL_ID:
-            try:
-                channel_msg = await post_character_to_channel(character_data, is_new=True)
-                await characters_base_col.update_one(
-                    {"char_id": char_id},
-                    {"$set": {"channel_posted": True, "channel_msg_id": channel_msg.id if channel_msg else None}}
-                )
-                channel_note = "\n📢 Channel: Posted ✅"
-            except Exception as ce:
-                await report_system_error(f"AddSpecial channel post ({char_id})", ce)
-                channel_note = f"\n⚠️ Channel post failed: <code>{escape_html(str(ce))}</code>"
-        await event.reply(
-            f"💠 <b>CNFT added</b> (spawnable: false)\n"
-            f"🆔 <code>{char_id}</code>\n"
-            f"👤 <code>{escape_html(parsed['name'])}</code>\n"
-            f"🫧 <code>{escape_html(parsed['anime'])}</code>\n"
-            f"🏷️ {RARITY_EMOJI[rarity_tier]} {rarity_tier}"
-            f"{channel_note}",
-            parse_mode='html'
-        )
-    except Exception as e:
-        await event.reply(f"❌ Failed to add <code>{char_id}</code>: <code>{escape_html(str(e))}</code>", parse_mode='html')
 
 # ---- Rarity-gate quiz illustration cache ----
 # Same idea as _CHAR_PHOTO_CACHE, separate small dict since this is keyed by
@@ -2322,7 +2250,78 @@ async def post_character_to_channel(char_doc, is_new=True):
         await _ensure_character_channel_entity()
         return await bot1.send_file(CHARACTER_CHANNEL_ID, file=storage_msg.media, caption=caption, parse_mode='html')
 
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]addspecial(?:@\w+)?$', 'bot1')))
+async def addspecial_toggle_command(event):
+    global _addspecial_armed
+    if event.sender_id != OWNER_ID: return
+    _addspecial_armed = not _addspecial_armed
+    if _addspecial_armed:
+        await event.reply(
+            "🔫 <b>/addspecial armed.</b> Forward each CNFT card announcement (media + caption) "
+            "to this DM now, one at a time — every one recognized gets added automatically with "
+            "<code>spawnable: false</code> (manual distribution only, never a random spawn). "
+            "Send /addspecial again when you're done.",
+            parse_mode='html'
+        )
+    else:
+        await event.reply("🛑 <b>/addspecial disarmed.</b> Forwards are back to being ignored.", parse_mode='html')
 
+@bot1.on(events.NewMessage(func=lambda e: e.is_private and e.sender_id == OWNER_ID and _addspecial_armed))
+async def addspecial_ingest_handler(event):
+    if is_duplicate_event(event): return
+    parsed = parse_cnft_forward(event.raw_text or "")
+    if not parsed:
+        return  # armed, but this particular DM doesn't look like a CNFT announcement — ignore silently
+    if not (event.photo or event.video or event.document):
+        return await event.reply("⚠️ Recognized a CNFT caption but no media is attached — skipped.", parse_mode='html')
+    char_id = f"CNFT{parsed['group_id']}{parsed['tier_letters']}"
+    if await characters_base_col.find_one({"char_id": char_id}):
+        return await event.reply(f"⚠️ <code>{char_id}</code> already exists — skipped (forwarded twice?).", parse_mode='html')
+    try:
+        forwarded_msg = await send_safe_message(bot1, SPECIFIC_CONTROL_GROUP, "", file=event.media)
+        prewarm_media_identity_cache(forwarded_msg, char_id)
+        photo_phash = await compute_phash_for_message(event)
+        rarity_tier = parsed["rarity_tier"]
+        character_data = {
+            "char_id": char_id,
+            "name": parsed["name"],
+            "category": parsed["anime"],
+            "rarity": f"{RARITY_EMOJI[rarity_tier]} {rarity_tier}",
+            "rarity_tier": rarity_tier,
+            "storage_msg_id": forwarded_msg.id,
+            "currency_value": _RARITY_VALUE_MAP[rarity_tier],
+            "spawn_count": 0,
+            "event": "General",
+            "spawn_limit": 0,
+            "spawnable": False,  # 🔑 excluded from trigger_dynamic_spawn's eligible_characters — manual distribution only
+            "photo_phash": photo_phash,
+            "created_at": time.time()
+        }
+        await characters_base_col.insert_one(character_data)
+        await invalidate_character_caches()
+        channel_note = ""
+        if CHARACTER_CHANNEL_ID:
+            try:
+                channel_msg = await post_character_to_channel(character_data, is_new=True)
+                await characters_base_col.update_one(
+                    {"char_id": char_id},
+                    {"$set": {"channel_posted": True, "channel_msg_id": channel_msg.id if channel_msg else None}}
+                )
+                channel_note = "\n📢 Channel: Posted ✅"
+            except Exception as ce:
+                await report_system_error(f"AddSpecial channel post ({char_id})", ce)
+                channel_note = f"\n⚠️ Channel post failed: <code>{escape_html(str(ce))}</code>"
+        await event.reply(
+            f"💠 <b>CNFT added</b> (spawnable: false)\n"
+            f"🆔 <code>{char_id}</code>\n"
+            f"👤 <code>{escape_html(parsed['name'])}</code>\n"
+            f"🫧 <code>{escape_html(parsed['anime'])}</code>\n"
+            f"🏷️ {RARITY_EMOJI[rarity_tier]} {rarity_tier}"
+            f"{channel_note}",
+            parse_mode='html'
+        )
+    except Exception as e:
+        await event.reply(f"❌ Failed to add <code>{char_id}</code>: <code>{escape_html(str(e))}</code>", parse_mode='html')
 
 # ---- /repostallchars — OWNER ONLY: posts EVERY existing character in the database to
 # CHARACTER_CHANNEL_ID (whatever it's CURRENTLY configured to — run this AFTER switching to the
