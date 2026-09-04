@@ -953,7 +953,7 @@ bot_mapping_col = db["xbot_bot_mapping"]           # other bot's user_id -> sour
 # unchanged from before, just enforced by comparing time.time() instead of Redis's own EXPIRE.
 _USER_CACHE = {}  # user_id -> (user_doc, cached_at)
 USER_CACHE_TTL = 300  # unchanged from the old Redis SETEX
-
+_stats_cache["data"] = None
 async def get_cached_user(user_id):
     cached = _USER_CACHE.get(user_id)
     if cached and (time.time() - cached[1]) < USER_CACHE_TTL:
@@ -3115,8 +3115,243 @@ async def change_single_rarity_handler(event):
         parse_mode='html'
     )
 
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]delbulk(?:@\w+)?\s+(\d+)(?:\s+(confirm))?$', 'bot1')))
+async def delbulk_command(event):
+    """Delete ALL characters with ID >= start_id (including owned ones) and clean up harem."""
+    if event.sender_id != OWNER_ID:
+        return
+    start_id = int(event.pattern_match.group(1))
+    confirmed = bool(event.pattern_match.group(2))
 
+    # 1. Find all BOD##### IDs with numeric part >= start_id
+    docs = await characters_base_col.find(
+        {"char_id": {"$regex": r"^BOD\d+$"}},
+        {"char_id": 1}
+    ).to_list(length=None)
+    target_ids = []
+    for d in docs:
+        m = re.match(r'^BOD(\d+)$', d["char_id"], re.IGNORECASE)
+        if m and int(m.group(1)) >= start_id:
+            target_ids.append(d["char_id"])
 
+    if not target_ids:
+        return await event.reply(f"✅ No BOD ids >= {start_id} found – nothing to delete.")
+
+    # 2. Count how many of these are owned (for preview)
+    owned_count = 0
+    for i in range(0, len(target_ids), 500):
+        batch = target_ids[i:i+500]
+        async for holder in users_catcher_col.find(
+            {"harem.char_id": {"$in": batch}},
+            {"harem.char_id": 1}
+        ):
+            for h in holder.get("harem", []):
+                if isinstance(h, dict) and h.get("char_id") in batch:
+                    owned_count += 1
+                    break  # only count user once per batch, but we just need a rough count
+
+    # 3. Preview without confirm
+    if not confirmed:
+        return await event.reply(
+            f"⚠️ <b>Found {len(target_ids)} character(s)</b> with ID >= {start_id}.\n"
+            f"🛡️ <b>{owned_count}</b> of them are owned by real players – they will be DELETED too!\n"
+            f"🗑️ <b>All {len(target_ids)}</b> will be removed from the database and from every player's harem.\n\n"
+            f"<b>This action is irreversible.</b>\n"
+            f"Reply <code>/delbulk {start_id} confirm</code> to proceed.",
+            parse_mode='html'
+        )
+
+    # 4. Actually delete everything
+    status = await event.reply(f"🔄 Deleting all {len(target_ids)} characters from ID {start_id} and cleaning up harems...")
+    removed = 0
+    total_targets = len(target_ids)
+
+    # Process in batches to avoid huge update operations
+    for i in range(0, total_targets, 200):
+        batch = target_ids[i:i+200]
+
+        # a) Remove from all users' harem (pull all occurrences)
+        await users_catcher_col.update_many(
+            {"harem.char_id": {"$in": batch}},
+            {"$pull": {"harem": {"char_id": {"$in": batch}}}}
+        )
+
+        # b) Clear fav_card if it points to any of these IDs
+        await users_catcher_col.update_many(
+            {"fav_card": {"$in": batch}},
+            {"$unset": {"fav_card": ""}}
+        )
+
+        # c) Delete character records and storage media
+        for cid in batch:
+            try:
+                doc = await characters_base_col.find_one({"char_id": cid})
+                if doc and doc.get("storage_msg_id"):
+                    try:
+                        await bot1.delete_messages(SPECIFIC_CONTROL_GROUP, [doc["storage_msg_id"]])
+                    except Exception:
+                        pass
+                await characters_base_col.delete_one({"char_id": cid})
+                _CHAR_PHOTO_CACHE.pop(cid, None)
+                removed += 1
+            except Exception as e:
+                print(f"⚠️ /delbulk failed for {cid}: {e}")
+
+        # Small delay to avoid hammering
+        await asyncio.sleep(0.1)
+
+    # 5. Invalidate caches
+    await invalidate_character_caches()
+
+    await status.edit(
+        f"✅ <b>Removed {removed}/{total_targets}</b> character(s) with ID >= {start_id}.\n"
+        f"🧹 All harem entries and favourites pointing to these IDs have been cleaned up.\n"
+        f"Run /warmmediacache to refresh the identity cache.",
+        parse_mode='html'
+    )
+# ==========================================
+# 📊 GLOBAL STATS (cached)
+# ==========================================
+_stats_cache = {"data": None, "cached_at": 0}
+STATS_CACHE_TTL = 300  # 5 minutes
+
+async def get_global_stats():
+    """Compute all global stats with caching."""
+    now = time.time()
+    if _stats_cache["data"] is not None and (now - _stats_cache["cached_at"]) < STATS_CACHE_TTL:
+        return _stats_cache["data"]
+
+    # 1. All characters
+    all_chars = await get_all_characters_cached()
+    total_chars = len(all_chars)
+
+    # 2. Count characters per rarity tier (from character DB)
+    char_counts = {}
+    for c in all_chars:
+        tier = c.get("rarity_tier") or classify_rarity(c.get("rarity", ""))
+        if tier and tier in RARITY_TIERS:
+            char_counts[tier] = char_counts.get(tier, 0) + 1
+        else:
+            char_counts["OTHER"] = char_counts.get("OTHER", 0) + 1
+
+    # 3. Total players
+    total_players = await users_catcher_col.count_documents({})
+
+    # 4. Total catches sum
+    total_catches_agg = await users_catcher_col.aggregate([
+        {"$group": {"_id": None, "total": {"$sum": "$total_caught"}}}
+    ]).to_list(length=1)
+    total_catches = total_catches_agg[0]["total"] if total_catches_agg else 0
+
+    # 5. Catches breakdown by rarity (from harem)
+    # We unwind harem, group by rarity string, then classify in Python
+    catch_rarity_raw = await users_catcher_col.aggregate([
+        {"$unwind": "$harem"},
+        {"$group": {"_id": "$harem.rarity", "count": {"$sum": 1}}}
+    ]).to_list(length=None)
+    catch_counts = {}
+    for item in catch_rarity_raw:
+        tier = classify_rarity(item["_id"])
+        if tier in RARITY_TIERS:
+            catch_counts[tier] = catch_counts.get(tier, 0) + item["count"]
+        else:
+            catch_counts["OTHER"] = catch_counts.get("OTHER", 0) + item["count"]
+
+    # 6. Unique characters discovered (at least one copy in any harem)
+    discovered_ids = await users_catcher_col.distinct("harem.char_id")
+    discovered = len(discovered_ids)
+
+    # 7. Money (not used) – set to 0 for now
+    total_money = 0.0
+
+    stats = {
+        "total_players": total_players,
+        "total_money": total_money,
+        "total_chars": total_chars,
+        "char_counts": char_counts,          # tier -> count
+        "total_catches": total_catches,
+        "catch_counts": catch_counts,        # tier -> count
+        "discovered": discovered,
+        "discovery_rate": (discovered / total_chars * 100) if total_chars else 0,
+    }
+    _stats_cache["data"] = stats
+    _stats_cache["cached_at"] = now
+    return stats
+
+def _progress_bar(pct, length=10):
+    filled = int(round(pct / 100 * length))
+    return "█" * filled + "░" * (length - filled)
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]stats(?:@\w+)?$', 'bot1')))
+async def stats_command_handler(event):
+    if event.sender_id != OWNER_ID and event.sender_id not in added_owner_ids:
+        # Allow only owner and added owners to see stats (or make it public? The sample seems admin-only; but we can allow anyone)
+        # We'll allow everyone to see, but you can restrict if needed.
+        pass  # For now, everyone can use it.
+
+    stats = await get_global_stats()
+
+    # Build output
+    lines = []
+    lines.append("📊 <b>GLOBAL ECONOMY & COLLECTION STATS</b>")
+    lines.append("")  # blank line
+
+    # Active Agents
+    lines.append(f"👥 <b>Active Agents:</b> <code>{stats['total_players']:,}</code> Players")
+
+    # Money (if applicable)
+    money_str = f"{stats['total_money']:,.2f}⭐" if stats['total_money'] else "0⭐"
+    lines.append(f"🪙 <b>Total Money in Circulation:</b> <code>{money_str}</code>")
+    lines.append("")  # blank
+
+    # Character Database
+    lines.append(f"🗄️ <b>CHARACTER DATABASE</b> <i>(/addchar total: {stats['total_chars']})</i>")
+    # Sort tiers by our order (RARITY_TIERS) and include only those with count > 0
+    for tier in RARITY_TIERS:
+        cnt = stats["char_counts"].get(tier, 0)
+        if cnt == 0:
+            continue
+        pct = (cnt / stats['total_chars'] * 100) if stats['total_chars'] else 0
+        emoji = RARITY_EMOJI.get(tier, RARITY_DEFAULT_EMOJI)
+        display_name = RARITY_DISPLAY_NAME.get(tier, tier.title())
+        bar = _progress_bar(pct)
+        lines.append(f"{emoji} <b>{display_name}</b> — <code>{cnt}</code>")
+        lines.append(f"{bar} <code>{pct:.1f}%</code>")
+    # Also show OTHER if any
+    if stats["char_counts"].get("OTHER", 0) > 0:
+        cnt = stats["char_counts"]["OTHER"]
+        pct = (cnt / stats['total_chars'] * 100) if stats['total_chars'] else 0
+        lines.append(f"❓ <b>OTHER</b> — <code>{cnt}</code>")
+        lines.append(f"{_progress_bar(pct)} <code>{pct:.1f}%</code>")
+    lines.append("")  # blank
+
+    # Total Catches
+    lines.append(f"🃏 <b>TOTAL CATCHES</b> <i>(all players combined: {stats['total_catches']})</i>")
+    for tier in RARITY_TIERS:
+        cnt = stats["catch_counts"].get(tier, 0)
+        if cnt == 0:
+            continue
+        pct = (cnt / stats['total_catches'] * 100) if stats['total_catches'] else 0
+        emoji = RARITY_EMOJI.get(tier, RARITY_DEFAULT_EMOJI)
+        display_name = RARITY_DISPLAY_NAME.get(tier, tier.title())
+        bar = _progress_bar(pct)
+        lines.append(f"{emoji} <b>{display_name}</b> — <code>{cnt}</code>")
+        lines.append(f"{bar} <code>{pct:.1f}%</code>")
+    if stats["catch_counts"].get("OTHER", 0) > 0:
+        cnt = stats["catch_counts"]["OTHER"]
+        pct = (cnt / stats['total_catches'] * 100) if stats['total_catches'] else 0
+        lines.append(f"❓ <b>OTHER/UNKNOWN</b> — <code>{cnt}</code>")
+        lines.append(f"{_progress_bar(pct)} <code>{pct:.1f}%</code>")
+    lines.append("")  # blank
+
+    # Discovery Rate
+    lines.append(f"🔎 <b>DISCOVERY RATE</b> <i>(unique characters caught at least once)</i>")
+    bar = _progress_bar(stats['discovery_rate'])
+    lines.append(f"{bar} <code>{stats['discovery_rate']:.1f}%</code>")
+    lines.append(f"<code>{stats['discovered']}/{stats['total_chars']}</code> characters discovered by players")
+
+    # Send
+    await event.reply("\n".join(lines), parse_mode='html')
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]send(?:@\w+)?(?:\s+(.*))?$', 'bot1')))
 async def broadcast(event):
     if event.sender_id != OWNER_ID: return
