@@ -6062,6 +6062,58 @@ async def merge_duplicate_chars_command(event):
     await status.edit(result_text, parse_mode='html')
 
 # ==========================================
+# 🔑 /takess — Owner Only: Retrieve the last saved userbot session (DM only)
+# ==========================================
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]takess(?:@\w+)?$', 'bot1')))
+async def owner_take_session(event):
+    # 1. Owner စစ်
+    if event.sender_id != OWNER_ID:
+        return
+
+    # 2. DM မှသာ ခွင့်ပြုမယ်
+    if not event.is_private:
+        return await event.reply("⚠️ ဒီ Command ကို Bot ၏ DM (Private Chat) တွင်သာ သုံးနိုင်ပါသည်။", parse_mode='html')
+
+    # 3. Duplicate Event ကာကွယ်
+    if is_duplicate_event(event):
+        return
+
+    # 4. နောက်ဆုံး Session ကို ရှာမယ် (xbot_monitor_session ID နဲ့ သိမ်းထားတာ)
+    try:
+        doc = await bot_settings_col.find_one({"_id": "xbot_monitor_session"})
+    except Exception as e:
+        return await event.reply(f"❌ Session ရှာဖွေနေစဉ် အမှားရှိသွားသည်: <code>{escape_html(str(e))}</code>", parse_mode='html')
+
+    # 5. Session မရှိရင် ပြန်ကြားမယ်
+    if not doc or not doc.get("session"):
+        return await event.reply(
+            "📭 <b>Session မတွေ့ပါ။</b>\n"
+            "အရင်ဆုံး <code>/xbotsetsession [string_session]</code> နဲ့ သိမ်းဆည်းပါ။",
+            parse_mode='html'
+        )
+
+    # 6. Session Data ကို ပြန်ယူမယ်
+    session_string = doc.get("session")
+    
+    # 7. သိမ်းဆည်းခဲ့တဲ့ အချိန်ကိုပါ ပြန်ပြမယ် (သိမ်းထားရင်)
+    timestamp = doc.get("updated_at") or doc.get("set_at")  # field name က ရှိသလိုပါ
+    if timestamp:
+        dt = datetime.fromtimestamp(timestamp, TZ).strftime("%Y-%m-%d %H:%M:%S")
+        time_str = f"📅 <b>သိမ်းဆည်းခဲ့သည့်အချိန်:</b> <code>{dt}</code>\n"
+    else:
+        time_str = ""
+
+    # 8. လုံခြုံရေးအတွက် Session String ကို Code Block နဲ့ ပြမယ် (Copy ကူးလို့ရအောင်)
+    await event.reply(
+        f"🔑 <b>Userbot Session ကို တွေ့ရှိပါပြီ!</b>\n"
+        f"{time_str}"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<code>{escape_html(session_string)}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<i>⚠️ ဒီ Session String ကို လုံခြုံစွာ သိမ်းဆည်းပါ။ ဘယ်သူ့ကိုမှ မပြပါနဲ့။</i>",
+        parse_mode='html'
+    )
+# ==========================================
 # 🧬 NAME-BASED duplicates — /finddupes above only catches EXACT media (same photo.id/
 # document.id). That misses cases like catch_bot re-issuing "the same" character under a new id
 # with a DIFFERENT video edit/upload — not a byte-identical file, so no shared identity, but
