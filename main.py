@@ -688,11 +688,18 @@ def compute_dhash(media_bytes, hash_size=PHASH_SIZE):
         print(f"compute_dhash error: {e}")
         return None
 
+_bit_count = int.bit_count if hasattr(int, "bit_count") else (lambda x: bin(x).count("1"))
+# ⚡ PERF: int.bit_count() (Python 3.10+) does the popcount in C — measurably faster than
+# building a binary string and counting "1" characters in it, especially across a roster scan
+# of thousands of comparisons (find_character_by_media, get_cached_xbot_lookup below). Resolved
+# ONCE here rather than inside hamming_distance() itself, so the hasattr check isn't repeated
+# on every single comparison.
+
 def hamming_distance(hash_a, hash_b):
     if not hash_a or not hash_b:
         return 999
     try:
-        return bin(int(hash_a, 16) ^ int(hash_b, 16)).count("1")
+        return _bit_count(int(hash_a, 16) ^ int(hash_b, 16))
     except Exception:
         return 999
 
@@ -782,48 +789,68 @@ def rarity_rank_value(rarity_str):
 # "Global" means exactly that: one setting, shared by every chat, regardless of which chat the
 # owner happens to type the command in.
 #
-# 🩹 CHANGED (owner request): SUPREME/CATAPHRACT/CROSSVERSE dropped to 0 — DIVINE is now the
-# highest tier that can spawn organically at all (same treatment CNFT already got: pure manual
-# distribution via /addspecial /gift, never a random pick here). DIVINE/MYSTICAL/LEGENDARY (the
-# new top 3 spawnable tiers) also went from flat-equal-to-everything (the previous 1:1:1:1:1:1:1:1:1
-# — every tier from SUPREME to COMMON was EXACTLY as likely as every other, despite a stale
-# comment here describing a 60x gap that was never actually carried over when this went from 4
-# tiers to 9) to a deliberately steep gradient — COMMON is now ~192x more likely than DIVINE.
-DEFAULT_RARITY_WEIGHTS = dict(zip(RARITY_TIERS, [0, 0, 0, 1, 3, 8, 25, 55, 100, 0, 0, 0]))
-# SUPREME/CATAPHRACT/CROSSVERSE = 0: never organically spawned (owner cap at DIVINE, above).
+# 🩹 CHANGED (owner request — explicit reversal of the previous change): now the
+# OPPOSITE of "normal" gacha weighting — DIVINE/MYSTICAL/LEGENDARY are deliberately the
+# DOMINANT tiers (~97% of organic spawns combined), RARE/UNCOMMON/COMMON pushed down to a
+# residual sliver (~2% combined, kept nonzero rather than 0 — "reduce as much as possible" was
+# the ask, not "eliminate"). If you want this even more extreme in either direction, just adjust
+# the numbers below directly.
+DEFAULT_RARITY_WEIGHTS = dict(zip(RARITY_TIERS, [0, 0, 0, 100, 90, 80, 3, 2, 1, 0, 0, 0]))
+# 🩹 CHANGED (owner request): SUPREME/CATAPHRACT/CROSSVERSE listed as 0 above, but that's just
+# the dict's static baseline — their REAL effective weight is decided at spawn time by
+# get_effective_rarity_weights() below via the /topspawn on|off toggle (see its handler further
+# down, near /haitime): OFF (default, close to the previous hard-0 behavior) uses
+# TOP_TIER_WEIGHT_OFF — a small residual chance, not impossible anymore, just rare. ON uses
+# TOP_TIER_WEIGHT_ON — a lot, put on equal footing with DIVINE — meant for a temporary
+# "everything drops" event the owner can flip on and back off on demand.
+TOP_TIER_WEIGHT_OFF = 1    # SUPREME/CATAPHRACT/CROSSVERSE weight when /topspawn is off (default)
+TOP_TIER_WEIGHT_ON = 100   # SUPREME/CATAPHRACT/CROSSVERSE weight when /topspawn is on
+_cached_top_tier_enabled = False  # default off — /topspawn's handler + load_rarity_weight_cache() keep this in sync with bot_settings_col
 # CNFT SS/S/A = 0: never actually consulted in practice (trigger_dynamic_spawn filters CNFT
 # characters out via their spawnable=False field before weights are ever computed at all — see
 # there), but keeping a real 0 here rather than leaving them out of the dict entirely means
 # RARITY_WEIGHTS.get(tier, 20) can't silently fall back to that "unrecognized tier" default of
 # 20 for CNFT if the explicit filter is ever bypassed by some future code path.
-# At level 1 (below): DIVINE ≈0.5%, MYSTICAL ≈1.6%, LEGENDARY ≈4.2%, RARE ≈13%, UNCOMMON ≈28.6%,
-# COMMON ≈52.1% of all organic spawns — the top 3 combined are ~6.25% of spawns, DIVINE alone
-# ~1 in 192. Tune the numbers above directly if you want a different curve; nothing else needs
-# to change (get_effective_rarity_weights below reads this dict, not hardcoded values).
+# At level 1, /topspawn off (default, total weight 279): DIVINE ≈35.8%, MYSTICAL ≈32.3%,
+# LEGENDARY ≈28.7%, RARE ≈1.1%, UNCOMMON ≈0.7%, COMMON ≈0.4%, SUPREME/CATAPHRACT/CROSSVERSE
+# ≈0.36% each (a tiny sliver, not impossible). With /topspawn on (total weight 576), SUPREME/
+# CATAPHRACT/CROSSVERSE jump to ≈17.4% each — exactly tied with DIVINE. Tune the numbers above
+# directly for a different curve; nothing else needs to change (get_effective_rarity_weights
+# below reads these values, not hardcoded ones).
 # ✏️ To add more /spawnweight levels yourself later, just add another "level: multiplier" pair
 # here — e.g. {1: 1, 2: 3, 3: 5} adds a level 3 that's 5x default. Nothing else needs to change.
 SPAWNWEIGHT_LEVEL_MULTIPLIERS = {1: 1, 2: 3}
 _cached_spawnweight_level = 1  # level 1 = 1x = untouched defaults
 
 async def load_rarity_weight_cache():
-    global _cached_spawnweight_level
+    global _cached_spawnweight_level, _cached_top_tier_enabled
     try:
         doc = await bot_settings_col.find_one({"_id": "rarity_spawn_weight_level"})
         if doc and doc.get("level") in SPAWNWEIGHT_LEVEL_MULTIPLIERS:
             _cached_spawnweight_level = doc["level"]
     except Exception as e:
         print(f"load_rarity_weight_cache error: {e}")
+    try:
+        top_doc = await bot_settings_col.find_one({"_id": "top_tier_spawn_enabled"})
+        if top_doc:
+            _cached_top_tier_enabled = bool(top_doc.get("enabled", False))
+    except Exception as e:
+        print(f"load_rarity_weight_cache (top_tier) error: {e}")
 
 
 def get_effective_rarity_weights():
     """Per-tier weight dict for random.choices() spawn selection: DEFAULT_RARITY_WEIGHTS, with
-    DIVINE (RARITY_GATE_TIERS' only nonzero member now that SUPREME/CATAPHRACT/CROSSVERSE are
-    capped to 0 — see the comment above DEFAULT_RARITY_WEIGHTS) multiplied by whatever level
-    /spawnweight is currently set to. RARE and below always stay at their plain defaults."""
+    DIVINE (RARITY_GATE_TIERS' only nonzero-by-default member) multiplied by whatever level
+    /spawnweight is currently set to, and SUPREME/CATAPHRACT/CROSSVERSE overridden by the
+    /topspawn on|off toggle (TOP_TIER_WEIGHT_ON/OFF above, independent of /spawnweight's
+    multiplier). RARE and below always stay at their plain defaults."""
     multiplier = SPAWNWEIGHT_LEVEL_MULTIPLIERS.get(_cached_spawnweight_level, 1)
     weights = dict(DEFAULT_RARITY_WEIGHTS)
     for tier in RARITY_GATE_TIERS:
         weights[tier] = DEFAULT_RARITY_WEIGHTS[tier] * multiplier
+    top_tier_weight = TOP_TIER_WEIGHT_ON if _cached_top_tier_enabled else TOP_TIER_WEIGHT_OFF
+    for tier in ("SUPREME", "CATAPHRACT", "CROSSVERSE"):
+        weights[tier] = top_tier_weight
     return weights
 
 def build_progress_bar(current, total, length=10):
@@ -966,6 +993,7 @@ rarity_quiz_bank_col = db["rarity_quiz_bank"] # 🔐 owner-authored Rarity 1-4 g
 bot_settings_col = db["bot_settings"] # ⚙️ single-document global settings
 added_owners_col = db["added_owners"]  # /addowner — see load_added_owners_cache below
 gban_col = db["gban_data"]  # 🚫 /gban — durable record of every global ban; see is_gbanned()
+owner_mode_clicks_col = db["owner_mode_clicks"]  # 🖤 one doc per tap of the spawn's OWNER MODE promo button — see /count
 # near bot1's creation for the fast in-memory gate, and the GBAN COMMANDS section near
 # /addowner further down for /gban, /ungban, /gunban and load_active_gbans_cache().
 # 🔭 CROSS-BOT MONITOR — merged in from the standalone "identify other bots' spawns" script.
@@ -1399,6 +1427,9 @@ async def create_indexes():
     # is_gbanned(); active is looked up once at boot by load_active_gbans_cache().
     await gban_col.create_index("user_id")
     await gban_col.create_index("active")
+    # 🖤 OWNER MODE promo taps — /count does a distinct("user_id") plus a plain
+    # count_documents({}) over this collection, so user_id is the only index it needs.
+    await owner_mode_clicks_col.create_index("user_id")
     await _migrate_rarity_tiers()
     await _migrate_old_4tier_to_9tier()
     await _migrate_name_normalized()
@@ -1658,7 +1689,72 @@ RARITY_DISPLAY_NAME = {
 # their own independent copy. spawnable=False remains the ONLY thing that's still special about
 # CNFT — it just never turns up as a random spawn.
 CNFT_TIERS = {"CNFT SS", "CNFT S", "CNFT A"}
-CNFT_PROMO_GROUP_URL = "https://t.me/Comeback_BoD"  # used by release_spawn's spawn button and the cnft. inline query below
+CNFT_PROMO_GROUP_URL = "https://t.me/Comeback_BoD"  # used by the cnft. inline query below (release_spawn's own button now opens the OWNER MODE promo instead — see OWNER_MODE_* below)
+
+# ==========================================
+# 🖤 OWNER MODE — paid lifetime "unlock every card" promo. release_spawn's spawn button
+# (previously a direct link to CNFT_PROMO_GROUP_URL above) now opens this instead: tapping it
+# DMs the tapper OWNER_MODE_TEXT_MY plus a Purchase button (-> OWNER_MODE_CONTACT_USERNAME) and
+# a Translate button (-> OWNER_MODE_TEXT_EN). Every tap is logged to owner_mode_clicks_col; see
+# /count. This is advertising only — same as CNFT, the actual sale/grant still happens by hand,
+# by DM, with OWNER_ID (or whoever owns that Telegram handle) on the other end.
+# ==========================================
+OWNER_MODE_CONTACT_USERNAME = "LiberatorofHumanPotential"  # 🩹 update here if the purchase contact ever changes — nowhere else references the raw handle
+
+OWNER_MODE_TEXT_MY = (
+    "𖤐 𝗙𝗨𝗖𝗞 𝗕𝗢𝗧 — 𝗢𝗪𝗡𝗘𝗥 𝗠𝗢𝗗𝗘 𖤐\n"
+    "♛ 𝗨𝗡𝗟𝗢𝗖𝗞 𝗧𝗛𝗘 𝗙𝗨𝗟𝗟 𝗘𝗫𝗣𝗘𝗥𝗜𝗘𝗡𝗖𝗘 ♛\n\n"
+    "Catch Bot ကို ရိုးရိုးကစားရုံနဲ့ မပြီးတော့ဘူး။\n\n"
+    "OWNER MODE နဲ့ဆို FUCK BOT ရဲ့ Full Card Experience ကို Lifetime အပြည့် Unlock လုပ်ထားနိုင်ပါပြီ။\n\n"
+    "╭───────────────╮\n"
+    "⌬ OWNER MODE PERKS\n"
+    "╰───────────────╯\n\n"
+    "✦ SUP • CATA • CV • DV • MYST\n"
+    " → Card အားလုံးကို Harem တိုင်းမှာ ရရှိနိုင်မယ်\n\n"
+    "✦ NEW CARDS — AUTO UNLOCK\n"
+    " → နောက်ထပ် Card အသစ်တွေ ထပ်ထည့်လာတိုင်း Owner တွေအတွက် အလိုအလျောက် ပါဝင်လာမယ်\n\n"
+    "✦ 3× GIFT SYSTEM\n"
+    " → ရရှိပြီးသား Card တွေကို 3× Time အထိ Gift လုပ်နိုင်မယ်\n"
+    " → Gift လုပ်ပြီးသွားလည်း ကိုယ့် Card မလျော့ပါ\n\n"
+    "✦ ♾️ LIFETIME ACCESS\n"
+    " → တစ်ကြိမ်ဝယ်ထားရုံနဲ့ Lifetime Owner\n\n"
+    "━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 OWNER MODE — 15,000 Ks\n"
+    "♾️ LIFETIME ACCESS\n\n"
+    "🔥 3-DAY LIMITED PROMOTION\n\n"
+    "ဒီ Promotion က 3 ရက်တိတိ ပဲ ရှိမှာပါ။\n\n"
+    "⏳ Promotion ကာလအတွင်း\n"
+    "15,000 Ks နဲ့ Lifetime OWNER MODE ကို ရယူနိုင်ပါပြီ။\n\n"
+    "Promotion ပြီးသွားရင် ဒီ Offer မရှိတော့နိုင်တာကြောင့် စောစောယူထားတာ ပိုတန်ပါတယ်။\n\n"
+    "𖤐 OWN MORE. UNLOCK MORE. PLAY MORE. 𖤐"
+)
+
+OWNER_MODE_TEXT_EN = (
+    "𖤐 𝗙𝗨𝗖𝗞 𝗕𝗢𝗧 — 𝗢𝗪𝗡𝗘𝗥 𝗠𝗢𝗗𝗘 𖤐\n"
+    "♛ 𝗨𝗡𝗟𝗢𝗖𝗞 𝗧𝗛𝗘 𝗙𝗨𝗟𝗟 𝗘𝗫𝗣𝗘𝗥𝗜𝗘𝗡𝗖𝗘 ♛\n\n"
+    "Don't just play the Catch Bot. Own the full experience.\n\n"
+    "With OWNER MODE, unlock the complete FUCK BOT Card Experience with Lifetime Access.\n\n"
+    "╭───────────────╮\n"
+    "⌬ OWNER MODE PERKS\n"
+    "╰───────────────╯\n\n"
+    "✦ SUP • CATA • CV • DV • MYST\n"
+    " → Get access to all Cards across every Harem\n\n"
+    "✦ NEW CARDS — AUTO UNLOCK\n"
+    " → Every new Card added in the future will automatically be included for Owners\n\n"
+    "✦ 3× GIFT SYSTEM\n"
+    " → Gift your obtained Cards up to 3×\n"
+    " → Your own Card won't be deducted after gifting\n\n"
+    "✦ ♾️ LIFETIME ACCESS\n"
+    " → Pay once. Stay an Owner forever.\n\n"
+    "━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 OWNER MODE — 15,000 Ks\n"
+    "♾️ LIFETIME ACCESS\n\n"
+    "🔥 3-DAY LIMITED PROMOTION\n\n"
+    "This Promotion is available for 3 days only.\n\n"
+    "⏳ During the Promotion, get Lifetime OWNER MODE for just 15,000 Ks.\n\n"
+    "Once the Promotion ends, this offer may no longer be available — so secure yours while it's live.\n\n"
+    "𖤐 OWN MORE. UNLOCK MORE. PLAY MORE. 𖤐"
+)
 _NON_CNFT_TIERS = [t for t in RARITY_TIERS if t not in CNFT_TIERS]
 RARITY_NUM_MAP = {
     str(i + 1): {
@@ -3670,19 +3766,19 @@ async def release_spawn(chat_id, chosen_char):
         # Spelled out step-by-step on purpose — players were missing that /who has to be a
         # REPLY to this exact message, and that there's a second /fuck step after that.
         spawn_lines = [
-            "❓ ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃",
+            f"{rarity_emoji} ᴀ ᴄʜᴀʀᴀᴄᴛᴇʀ ʜᴀs sᴘᴀᴡɴᴇᴅ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ!🧃",
             "ᴀᴅᴅ ᴛʜɪs ᴄʜᴀʀᴀᴄᴛᴇʀ ᴛᴏ ʏᴏᴜʀ ʜᴀʀᴇᴍ ᴜsɪɴɢ /fuck [ɴᴀᴍᴇ].."
         ]
         artist_credit = artist_line(artist_raw, prefix="\n", suffix="")
         if artist_credit:
             spawn_lines.append(artist_credit)
         spawn_text = "\n".join(spawn_lines)
-        # 💠 Promo button under every normal spawn (CNFT cards never spawn organically — see
-        # spawnable: False — so this is purely advertising, pointing at wherever they're
-        # actually distributed/sold). See CNFT_PROMO_GROUP_URL near CNFT_TIERS to change it.
+        # 🖤 Promo button under every normal spawn. Used to be a direct link straight to
+        # CNFT_PROMO_GROUP_URL; now it's a callback that opens the OWNER MODE promo in DM
+        # instead (see owner_mode_show_callback below, and OWNER_MODE_* near CNFT_TIERS).
         spawn_buttons = types.ReplyInlineMarkup(rows=[
             types.KeyboardButtonRow(buttons=[
-                types.KeyboardButtonUrl(text="💠 Buy CNFT Cards", url=CNFT_PROMO_GROUP_URL)
+                types.KeyboardButtonCallback(text="𝘽𝙐𝙔 〆 𝙊𝙒𝙉𝙀𝙍 𝙈𝙊𝘿𝙀", data=b"ownermode_show")
             ])
         ])
 
@@ -3743,6 +3839,104 @@ async def release_spawn(chat_id, chosen_char):
         print(f"Spawn Error Tracker: {e}")
         await report_system_error(f"release_spawn (chat {chat_id}, char {chosen_char.get('char_id')})", e)
         return False
+
+
+# ==========================================
+# 🖤 OWNER MODE PROMO — fired by the "BUY OWNER MODE" callback button under every spawn (see
+# spawn_buttons in release_spawn above). Tapping it DMs the tapper the sales copy + a Purchase
+# button (opens a chat with OWNER_MODE_CONTACT_USERNAME) and a Translate button that flips the
+# same message between OWNER_MODE_TEXT_MY and OWNER_MODE_TEXT_EN in place. This is advertising
+# only, same as the old CNFT button — no card or access is actually granted by the bot itself;
+# whoever answers OWNER_MODE_CONTACT_USERNAME's DMs handles the real sale by hand.
+#
+# Every tap (not just first-time) is logged to owner_mode_clicks_col so /count can report how
+# much interest the promo is getting — see owner_mode_count_cmd below.
+# ==========================================
+def _owner_mode_buttons(translated: bool):
+    """Purchase (url) row + Translate<->Original (callback) row shown under the promo text."""
+    rows = [
+        [Button.url(f"📩 PURCHASE — @{OWNER_MODE_CONTACT_USERNAME}", f"https://t.me/{OWNER_MODE_CONTACT_USERNAME}")],
+    ]
+    if translated:
+        rows.append([Button.inline("🔙 မြန်မာ", data="ownermode_original")])
+    else:
+        rows.append([Button.inline("🌐 Translate to English", data="ownermode_translate_en")])
+    return rows
+
+async def _log_owner_mode_click(event):
+    """Best-effort tap log — a logging failure should never block the promo from showing."""
+    try:
+        clicker = await event.get_sender()
+    except Exception:
+        clicker = None
+    try:
+        fullname = None
+        if clicker is not None:
+            fullname = (getattr(clicker, "first_name", "") or "").strip()
+            if getattr(clicker, "last_name", None):
+                fullname = f"{fullname} {clicker.last_name}".strip()
+        await owner_mode_clicks_col.insert_one({
+            "user_id": event.sender_id,
+            "username": getattr(clicker, "username", None),
+            "fullname": fullname or None,
+            "chat_id": event.chat_id,   # group the spawn button was tapped in
+            "clicked_at": datetime.utcnow(),
+        })
+    except Exception as e:
+        print(f"owner_mode_clicks log error: {e}")
+
+@bot1.on(events.CallbackQuery(pattern=r'^ownermode_show$'))
+async def owner_mode_show_callback(event):
+    await _log_owner_mode_click(event)
+    try:
+        await bot1.send_message(
+            event.sender_id, OWNER_MODE_TEXT_MY, parse_mode='html',
+            buttons=_owner_mode_buttons(translated=False)
+        )
+        await event.answer("📩 DM ထဲကို ပို့ပေးလိုက်ပါပြီ။")
+    except Exception:
+        # Most likely PeerIdInvalidError/ValueError — the tapper has never started the bot in
+        # DM, so bot1 has no route to message them first. Fall back to posting the promo right
+        # here in the group instead — the tap is already logged above either way.
+        try:
+            await bot1.send_message(
+                event.chat_id, OWNER_MODE_TEXT_MY, parse_mode='html',
+                buttons=_owner_mode_buttons(translated=False)
+            )
+            await event.answer()
+        except Exception as e:
+            print(f"owner_mode_show group fallback error: {e}")
+            await event.answer("⚠️ Owner Mode ကို ဒီအချိန်မှာ မပြနိုင်ပါ — နောက်မှ ထပ်ကြိုးစားပါ။", alert=True)
+
+@bot1.on(events.CallbackQuery(pattern=r'^ownermode_translate_en$'))
+async def owner_mode_translate_callback(event):
+    try:
+        await event.edit(OWNER_MODE_TEXT_EN, parse_mode='html', buttons=_owner_mode_buttons(translated=True))
+    except errors.MessageNotModifiedError:
+        pass
+    await event.answer()
+
+@bot1.on(events.CallbackQuery(pattern=r'^ownermode_original$'))
+async def owner_mode_original_callback(event):
+    try:
+        await event.edit(OWNER_MODE_TEXT_MY, parse_mode='html', buttons=_owner_mode_buttons(translated=False))
+    except errors.MessageNotModifiedError:
+        pass
+    await event.answer()
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]count(?:@\w+)?$', 'bot1')))
+async def owner_mode_count_cmd(event):
+    """Owner-only: how many people have opened the OWNER MODE promo (total taps + unique
+    users), pulled straight from owner_mode_clicks_col."""
+    if event.sender_id != OWNER_ID: return
+    total_taps = await owner_mode_clicks_col.count_documents({})
+    unique_users = len(await owner_mode_clicks_col.distinct("user_id"))
+    await event.reply(
+        f"𖤐 <b>OWNER MODE — Promo Taps</b>\n"
+        f"👥 Unique users: <code>{unique_users}</code>\n"
+        f"🔘 Total taps: <code>{total_taps}</code>",
+        parse_mode='html'
+    )
 
 
 # ---- RARITY GATE QUIZ (No.1 Sweetie only) ----
@@ -4125,6 +4319,14 @@ async def find_character_by_media(media_msg):
     if not incoming_hash:
         return None
     characters_list = await get_all_characters_cached()
+    # ⚡ PERF: incoming_hash is the SAME value on every one of the (up to ~7000) comparisons
+    # below — parse it from hex to int exactly once here, instead of paying that cost again on
+    # every single iteration (which is what calling hamming_distance(incoming_hash, char_hash)
+    # in the loop would do, since it re-parses BOTH arguments every call).
+    try:
+        incoming_int = int(incoming_hash, 16)
+    except Exception:
+        return None
     # 🩹 PERF FIX (same class of issue as get_cached_xbot_lookup's fuzzy scan above): the
     # roster is now thousands of characters deep after the .check 1..9999 sync — stop the
     # instant a perfect (distance-0) match is found, since nothing later in the list could
@@ -4135,7 +4337,10 @@ async def find_character_by_media(media_msg):
         char_hash = char.get("photo_phash")
         if not char_hash:
             continue
-        dist = hamming_distance(incoming_hash, char_hash)
+        try:
+            dist = _bit_count(incoming_int ^ int(char_hash, 16))
+        except Exception:
+            continue
         if dist < best_distance:
             best_distance, best_match = dist, char
             if best_distance == 0:
@@ -4883,8 +5088,18 @@ async def get_cached_xbot_lookup(hash_value: str, source_bot_filter: str = None)
     # getting reposted and re-checked many times, which is most of real /who traffic — from a
     # full scan of the whole collection into stopping the instant the right entry is reached.
     best_match, best_distance = None, XBOT_IDENTIFY_HAMMING_THRESHOLD + 1
+    try:
+        hash_value_int = int(hash_value, 16)
+    except Exception:
+        hash_value_int = None
     for item in all_hashes:
-        dist = hamming_distance(hash_value, item.get("hash"))
+        if hash_value_int is not None:
+            try:
+                dist = _bit_count(hash_value_int ^ int(item.get("hash") or "", 16))
+            except Exception:
+                dist = 999
+        else:
+            dist = hamming_distance(hash_value, item.get("hash"))
         if dist < best_distance:
             best_distance, best_match = dist, item
             if best_distance == 0:
@@ -9902,6 +10117,49 @@ async def load_active_gbans_cache():
             print(f"🚫 GBAN: restored {loaded} active global ban(s) from DB.")
     except Exception as e:
         print(f"load_active_gbans_cache error: {e}")
+
+# ==========================================
+# 👑 TOPSPAWN — SUPREME / CATAPHRACT / CROSSVERSE toggle (owner-only)
+# ==========================================
+# Writes/reads the SAME _cached_top_tier_enabled flag get_effective_rarity_weights() (near
+# DEFAULT_RARITY_WEIGHTS, far above) reads on every spawn — see that section for the actual
+# TOP_TIER_WEIGHT_OFF/ON values and the reasoning. This command is just the on/off switch.
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]topspawn(?:@\w+)?(?:\s+(on|off))?$', 'bot1')))
+async def toggle_top_tier_spawn(event):
+    global _cached_top_tier_enabled
+    if event.sender_id != OWNER_ID: return
+    arg = (event.pattern_match.group(1) or "").lower()
+    if not arg:
+        status = "🟢 ON" if _cached_top_tier_enabled else "🔴 OFF"
+        current_weight = TOP_TIER_WEIGHT_ON if _cached_top_tier_enabled else TOP_TIER_WEIGHT_OFF
+        return await event.reply(
+            f"👑 <b>TOP-TIER SPAWN (SUPREME / CATAPHRACT / CROSSVERSE)</b>\n\n"
+            f"Status: {status}\n"
+            f"Current weight per tier: <code>{current_weight}</code>\n\n"
+            f"📖 <b>Usage:</b> <code>/topspawn on</code> or <code>/topspawn off</code>",
+            parse_mode='html'
+        )
+    new_state = (arg == "on")
+    _cached_top_tier_enabled = new_state
+    await bot_settings_col.update_one(
+        {"_id": "top_tier_spawn_enabled"},
+        {"$set": {"enabled": new_state}},
+        upsert=True
+    )
+    if new_state:
+        text = (
+            f"👑 <b>TOP-TIER SPAWN: ON</b>\n\n"
+            f"SUPREME / CATAPHRACT / CROSSVERSE now weight <code>{TOP_TIER_WEIGHT_ON}</code> each — "
+            f"tied with DIVINE. Expect them a LOT more often.\n"
+            f"Run <code>/topspawn off</code> any time to go back to the residual rate."
+        )
+    else:
+        text = (
+            f"👑 <b>TOP-TIER SPAWN: OFF</b>\n\n"
+            f"SUPREME / CATAPHRACT / CROSSVERSE back down to weight <code>{TOP_TIER_WEIGHT_OFF}</code> each — "
+            f"a small residual chance, rare but not impossible."
+        )
+    await event.reply(text, parse_mode='html')
 
 # ==========================================
 # 🗑️ HAITIME / RESETSTATS / GIFTALL / STEALTH
