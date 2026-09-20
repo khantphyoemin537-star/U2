@@ -4,3 +4,14 @@ motor==3.5.1
 telethon==1.36.0
 python-multipart==0.0.9
 pytz
+python-telegram-bot
+pymongo
+flask
+Pillow
+gunicorn
+dnspython
+groq
+openai
+motor 
+imageio
+redis
