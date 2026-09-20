@@ -1,5 +1,4 @@
-python-telegram-bot
-telethon
+telethon>=1.38.0
 pymongo
 flask
 Pillow
@@ -8,6 +7,6 @@ dnspython
 pytz
 groq
 openai
-motor 
+motor
 imageio
 redis
