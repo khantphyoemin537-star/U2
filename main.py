@@ -8417,6 +8417,33 @@ async def clear_xbot_hashes_command(event):
     result = await xbot_hashes_col.delete_many({})
     await event.reply(f"✅ Cleared {result.deleted_count} xbot_hashes_col record(s).")
 
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]rm\s+(-?\d+)$', 'bot1')))
+async def rm_added_owner_by_id(event):
+    """/rm <user_id> — Added Owner ကို ID နဲ့ တိုက်ရိုက် ဖျက်ရန် (reply မလို)။
+    ဥပမာ: /rm 123456789"""
+    if event.sender_id != OWNER_ID:
+        return
+    target_id = int(event.pattern_match.group(1))
+    if target_id == OWNER_ID:
+        return await event.reply("❌ That's you — can't remove yourself.")
+    if target_id not in added_owner_ids:
+        return await event.reply(
+            f"❌ <code>{target_id}</code> isn't an added owner.\n"
+            f"<i>Use /listowners to see the current list.</i>",
+            parse_mode='html'
+        )
+    await added_owners_col.delete_one({"user_id": target_id})
+    added_owner_ids.discard(target_id)
+    try:
+        mention = await get_html_mention(event, target_id)
+    except Exception:
+        mention = f"<code>{target_id}</code>"
+    await event.reply(
+        f"✅ <b>Removed:</b> {mention} (<code>{target_id}</code>)\n"
+        f"👑 <b>Added owners left:</b> <code>{len(added_owner_ids)}</code>",
+        parse_mode='html'
+    )
+    
 @bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]relinkid\s+(\S+)$', 'bot1')))
 async def relink_id_command(event):
     """Manual fallback for exactly the case being reported: catch_bot posts a media UPDATE for
