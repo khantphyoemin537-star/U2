@@ -1173,6 +1173,10 @@ users_catcher_col = db["users_catcher_data"]
 groups_counters_col = db["groups_msg_counters"]
 groups_config_col = db["groups_catcher_config"]
 guilds_col = db["guilds_data"]
+POWER_RANGER_COLLECTIONS = [
+    "powerranger_col", "powerranger_col2", "powerranger_col3",
+    "ninja_col",  # 🥷 reuse the same 31 ninja sessions for /nsync + /syncfromcatch_parallel
+]
 gift_history_col = db["gift_history"]
 haido_history_col = db["haido_history"] # records each person-to-person /gift for profile stats
 artists_col = db["artists"]  # 🎨 artist_name (lowercased) -> linked Telegram user_id, for Guard Bot collect rewards — see /linkartist
@@ -13541,6 +13545,561 @@ async def run_bot1_forever():
             await asyncio.sleep(30)
 
 
+# ==========================================================
+# 🥷 NINJA SYNC — ported from SovereignNinja, integrated into bot1
+# ----------------------------------------------------------
+# Parallel `.check 1..N` sweep using the SAME worker_pool_clients pool that
+# /syncfromcatch_parallel already uses (loaded from ninja_col via
+# POWER_RANGER_COLLECTIONS). This is the bot1-native version of /nsync — it
+# does NOT require running the separate SovereignNinja process; stop that
+# process first to avoid session conflicts.
+#
+# Differences vs. /syncfromcatch_parallel:
+#   • Static range split (IDs ÷ worker count, no queue)
+#   • Boot warm-up (all workers /start the target bot once on startup)
+#   • Strict per-call timeouts — never hangs on FloodWait
+#   • Per-worker progress bars in /nsyncstatus
+#   • Skips already-synced IDs (synced_via_check=True) → resume-friendly
+# ==========================================================
+
+NSYNC_REPLY_TIMEOUT        = 30     # seconds to wait for one .check reply
+NSYNC_WARMUP_TIMEOUT       = 15     # seconds cap per /start attempt
+NSYNC_WARMUP_DELAY         = 1.5    # wait after /start before first .check
+NSYNC_COOLDOWN_BACKOFF     = 5      # wait after a cooldown-looking reply
+NSYNC_MAX_COOLDOWN_RETRIES = 3
+NSYNC_NINJA_STAGGER        = 0.3    # seconds between launching each worker
+NSYNC_PACE_PER_CHECK       = 1.0    # seconds between IDs on the same worker
+NSYNC_PROGRESS_INTERVAL    = 30     # seconds between progress DMs
+NSYNC_AUTO_WARMUP_ON_BOOT  = True   # warm-up workers right after load_worker_pool()
+
+_nsync_state = {
+    "running": False,
+    "cancel": False,
+    "stats": {"checked": 0, "imported": 0, "updated": 0, "misses": 0, "errors": 0},
+    "ranges": [],                # list[list[int]] — one list per worker
+    "progress": {},              # worker_index -> count done
+    "started_at": None,
+    "task": None,
+    "control_group_id": 0,
+    "lock": asyncio.Lock(),
+}
+
+async def _nsync_load_settings():
+    """Load persistent control group id from bot_settings_col."""
+    try:
+        doc = await bot_settings_col.find_one({"_id": "ninja_sync_settings"})
+        if doc and isinstance(doc.get("control_group_id"), int) and doc["control_group_id"] != 0:
+            _nsync_state["control_group_id"] = doc["control_group_id"]
+    except Exception as e:
+        print(f"nsync load_settings error: {e}")
+
+async def _nsync_save_control_group(chat_id: int):
+    _nsync_state["control_group_id"] = chat_id
+    await bot_settings_col.update_one(
+        {"_id": "ninja_sync_settings"},
+        {"$set": {"control_group_id": chat_id}},
+        upsert=True,
+    )
+
+async def _nsync_warmup_one(client, label: str) -> bool:
+    """Robust /start with strict timeout + fallback target. Returns True on success."""
+    username = (SYNC_TARGET_BOT_USERNAME if "SYNC_TARGET_BOT_USERNAME" in globals() else "Character_Catcher_Bot")
+    if not username.startswith("@"):
+        username = "@" + username
+    targets = [username, CATCH_BOT_ID]
+    for target in targets:
+        for attempt in range(1, 3):
+            try:
+                await asyncio.wait_for(
+                    client.send_message(target, "/start"),
+                    timeout=NSYNC_WARMUP_TIMEOUT,
+                )
+                await asyncio.sleep(NSYNC_WARMUP_DELAY)
+                logger.info(f"✅ [nsync/{label}] /start OK via {target}")
+                return True
+            except asyncio.TimeoutError:
+                logger.warning(f"⏱️ [nsync/{label}] /start TIMEOUT via {target}")
+            except FloodWaitError as e:
+                logger.warning(f"⏳ [nsync/{label}] FloodWait {e.seconds}s via {target}")
+                if e.seconds > 30:
+                    break
+                await asyncio.sleep(min(e.seconds + 1, 15))
+            except Exception as e:
+                logger.warning(f"⚠️ [nsync/{label}] /start {type(e).__name__}: {str(e)[:60]} via {target}")
+                await asyncio.sleep(1)
+    logger.error(f"❌ [nsync/{label}] all warm-up targets failed")
+    return False
+
+async def _nsync_boot_warmup():
+    """Called once after worker_pool_clients is loaded — warms up all workers."""
+    await asyncio.sleep(5)
+    if not worker_pool_clients:
+        logger.info("[nsync] no workers to warm-up")
+        return
+    ok = fail = 0
+    for client, label in worker_pool_clients:
+        try:
+            if await _nsync_warmup_one(client, label):
+                ok += 1
+            else:
+                fail += 1
+        except Exception as e:
+            fail += 1
+            logger.warning(f"[nsync] boot warmup {label}: {e}")
+    logger.info(f"🔥 [nsync] boot warm-up: {ok}/{ok + fail} OK")
+
+async def _nsync_check_one(client, label: str, num: int):
+    """Returns ('ok', reply_msg) / ('miss', reply_or_None) / ('error', reply_or_None) / ('cancelled', None)."""
+    for attempt in range(NSYNC_MAX_COOLDOWN_RETRIES + 1):
+        if _nsync_state["cancel"]:
+            return ("cancelled", None)
+        try:
+            recent = await asyncio.wait_for(
+                client.get_messages(CATCHBOT_SYNC_CHAT_ID, limit=1),
+                timeout=10,
+            )
+            last_id = recent[0].id if recent else 0
+        except Exception:
+            last_id = 0
+        try:
+            async with client.conversation(CATCHBOT_SYNC_CHAT_ID, timeout=NSYNC_REPLY_TIMEOUT) as conv:
+                await asyncio.wait_for(conv.send_message(f".check {num}"), timeout=15)
+                deadline = time.time() + NSYNC_REPLY_TIMEOUT
+                reply = None
+                while True:
+                    rem = deadline - time.time()
+                    if rem <= 0:
+                        break
+                    try:
+                        msg = await conv.get_response(timeout=rem)
+                    except asyncio.TimeoutError:
+                        break
+                    if msg.sender_id == CATCH_BOT_ID and msg.id > last_id:
+                        reply = msg
+                        break
+                if reply is None:
+                    return ("miss", None)
+
+            text = reply.raw_text or ""
+            info = parse_catchbot_check(text)
+            if not info:
+                low = text.lower()
+                if any(h in low for h in ("cooldown", "please wait", "slow down", "too fast",
+                                          "try again in", "rate limit", "flood")):
+                    logger.info(f"⏳ [nsync/{label}] id={num} cooldown — backoff {NSYNC_COOLDOWN_BACKOFF}s")
+                    await asyncio.sleep(NSYNC_COOLDOWN_BACKOFF)
+                    continue
+                return ("miss", reply)
+            if not (reply.photo or reply.video or reply.document):
+                return ("error", reply)
+            return ("ok", reply)
+        except FloodWaitError as e:
+            logger.warning(f"⏳ [nsync/{label}] id={num} FloodWait {e.seconds}s")
+            if e.seconds > 60:
+                return ("error", None)
+            await asyncio.sleep(e.seconds + 1)
+            continue
+        except errors.ChatWriteForbiddenError:
+            logger.error(f"❌ [nsync/{label}] write forbidden — aborting worker")
+            return ("error", None)
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️ [nsync/{label}] id={num} timeout")
+            return ("miss", None)
+        except Exception as e:
+            logger.warning(f"⚠️ [nsync/{label}] id={num} {type(e).__name__}: {str(e)[:80]}")
+            await asyncio.sleep(2)
+            continue
+    return ("error", None)
+
+async def _nsync_store(client, label: str, info: dict, reply_msg) -> str:
+    """Upsert characters_base_col with char_id = BOD<id>. Returns 'imported'/'updated'/'error'."""
+    char_id = f"BOD{info['id']}"
+    try:
+        existing = await characters_base_col.find_one({"char_id": char_id})
+        r_info = _resolve_check_rarity(info["rarity_raw"], existing) if "_resolve_check_rarity" in globals() else None
+        if not r_info:
+            # Fallback: use classify_rarity + RARITY_NUM_MAP
+            tier = classify_rarity(info["rarity_raw"])
+            if tier in CNFT_TIERS if "CNFT_TIERS" in globals() else False:
+                r_info = {"name": info["rarity_raw"].strip(), "value": 100000}
+            else:
+                num = RARITY_TIER_TO_NUM.get(tier)
+                r_info = RARITY_NUM_MAP[num] if num and num in RARITY_NUM_MAP else RARITY_NUM_MAP[str(len(_NON_CNFT_TIERS))]
+
+        fwd = await asyncio.wait_for(
+            client.send_message(_nsync_state["control_group_id"], "", file=reply_msg.media),
+            timeout=60,
+        )
+        storage_id = fwd.id
+        phash = await compute_phash_for_message(reply_msg)
+
+        data = {
+            "char_id": char_id,
+            "name": info["name"],
+            "name_normalized": _normalize_catchbot_name(info["name"]) if "_normalize_catchbot_name" in globals() else info["name"].lower(),
+            "category": info["category"],
+            "rarity": r_info["name"],
+            "rarity_tier": classify_rarity(r_info["name"]),
+            "storage_msg_id": storage_id,
+            "currency_value": r_info.get("value", 0),
+            "event": info["event"] or "General",
+            "photo_phash": phash,
+            "auto_imported_from": "catch_bot",
+            "source_rarity": info["rarity_raw"],
+            "synced_via_check": True,
+            "last_synced_at": time.time(),
+        }
+        if is_cnft_rarity(r_info["name"]) if "is_cnft_rarity" in globals() else False:
+            data["spawnable"] = False
+
+        if existing:
+            old_sid = existing.get("storage_msg_id")
+            if old_sid and old_sid != storage_id:
+                try:
+                    await client.delete_messages(_nsync_state["control_group_id"], [old_sid])
+                except Exception:
+                    pass
+            await characters_base_col.update_one({"char_id": char_id}, {"$set": data})
+            return "updated"
+        else:
+            data.update({"spawn_count": 0, "spawn_limit": 0, "created_at": time.time()})
+            await characters_base_col.insert_one(data)
+            return "imported"
+    except FloodWaitError as e:
+        await asyncio.sleep(e.seconds + 1)
+        return "error"
+    except Exception as e:
+        logger.error(f"❌ [nsync/{label}] store {char_id}: {type(e).__name__}: {e}")
+        return "error"
+
+async def _nsync_worker(client, label: str, my_ids: List[int], worker_index: int):
+    logger.info(f"🥷 [nsync/{label}] worker START — idx={worker_index}, {len(my_ids)} ids ({my_ids[0]}..{my_ids[-1]})")
+    try:
+        if not await _nsync_warmup_one(client, label):
+            logger.warning(f"⚠️ [nsync/{label}] warmup failed — worker exits")
+            return
+        total = len(my_ids)
+        for i, num in enumerate(my_ids, 1):
+            if _nsync_state["cancel"]:
+                logger.info(f"🛑 [nsync/{label}] cancelled at {i}/{total}")
+                return
+            outcome, reply = await _nsync_check_one(client, label, num)
+            if outcome == "cancelled":
+                return
+            if outcome == "ok" and reply is not None:
+                info = parse_catchbot_check(reply.raw_text or "")
+                if info:
+                    result = await _nsync_store(client, label, info, reply)
+                    async with _nsync_state["lock"]:
+                        _nsync_state["stats"]["checked"] += 1
+                        if result == "imported":
+                            _nsync_state["stats"]["imported"] += 1
+                        elif result == "updated":
+                            _nsync_state["stats"]["updated"] += 1
+                        else:
+                            _nsync_state["stats"]["errors"] += 1
+                    logger.info(f"[nsync/{label}] ✓ {i}/{total} id={num} → {result}")
+                else:
+                    async with _nsync_state["lock"]:
+                        _nsync_state["stats"]["checked"] += 1
+                        _nsync_state["stats"]["errors"] += 1
+            elif outcome == "miss":
+                async with _nsync_state["lock"]:
+                    _nsync_state["stats"]["checked"] += 1
+                    _nsync_state["stats"]["misses"] += 1
+            else:
+                async with _nsync_state["lock"]:
+                    _nsync_state["stats"]["checked"] += 1
+                    _nsync_state["stats"]["errors"] += 1
+            _nsync_state["progress"][worker_index] = i
+            await asyncio.sleep(NSYNC_PACE_PER_CHECK)
+        logger.info(f"✅ [nsync/{label}] worker DONE")
+    except Exception as e:
+        logger.exception(f"❌ [nsync/{label}] worker CRASHED: {e}")
+
+async def _nsync_progress_loop(total: int):
+    while _nsync_state["running"] and not _nsync_state["cancel"]:
+        await asyncio.sleep(NSYNC_PROGRESS_INTERVAL)
+        if not _nsync_state["running"]:
+            break
+        async with _nsync_state["lock"]:
+            s = dict(_nsync_state["stats"])
+        elapsed = max(1, int(time.time() - (_nsync_state["started_at"] or time.time())))
+        rate = s["checked"] / elapsed
+        remaining = max(0, total - s["checked"])
+        eta = int(remaining / rate) if rate > 0 else 0
+        wl = []
+        for i in range(min(6, len(_nsync_state["ranges"]))):
+            d = _nsync_state["progress"].get(i, 0)
+            t = len(_nsync_state["ranges"][i])
+            wl.append(f"  [{i+1}] <code>{d}/{t}</code>")
+        try:
+            await bot1.send_message(
+                OWNER_ID,
+                f"📊 <b>NSync Progress</b>\n"
+                f"✔️ <code>{s['checked']}/{total}</code>\n"
+                f"🆕 <code>{s['imported']}</code> · 🔄 <code>{s['updated']}</code> "
+                f"· ➖ <code>{s['misses']}</code> · ⚠️ <code>{s['errors']}</code>\n"
+                f"⏱️ <code>{rate:.2f}/s</code> · ETA <code>{eta//60}m{eta%60}s</code>\n\n"
+                + "\n".join(wl),
+                parse_mode='html',
+            )
+        except Exception:
+            pass
+
+async def _nsync_run(start_id: int, end_id: int):
+    """Main run loop — static range split across all worker_pool_clients."""
+    if not worker_pool_clients:
+        await bot1.send_message(OWNER_ID, "❌ <b>NSync:</b> Worker pool empty. Run <code>/xbotloadworkers</code> first.", parse_mode='html')
+        _nsync_state["running"] = False
+        return
+    if _nsync_state["control_group_id"] == 0:
+        await bot1.send_message(OWNER_ID, "❌ <b>NSync:</b> Control group not set. Run <code>/nsyncsetgroup -100xxx</code>.", parse_mode='html')
+        _nsync_state["running"] = False
+        return
+
+    # Skip already-synced
+    skip = set()
+    try:
+        cursor = characters_base_col.find(
+            {"synced_via_check": True, "char_id": {"$regex": r"^BOD\d+$"}},
+            {"char_id": 1},
+        )
+        async for d in cursor:
+            try:
+                skip.add(int(d["char_id"][3:]))
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[nsync] skip lookup failed: {e}")
+
+    all_ids = [i for i in range(start_id, end_id + 1) if i not in skip]
+    total = len(all_ids)
+    if total == 0:
+        try:
+            await bot1.send_message(OWNER_ID, "✅ <b>NSync:</b> All IDs already synced — nothing to do.", parse_mode='html')
+        except Exception:
+            pass
+        _nsync_state["running"] = False
+        return
+
+    num_workers = len(worker_pool_clients)
+    chunk_size = (total + num_workers - 1) // num_workers
+    ranges = []
+    for i in range(num_workers):
+        s = i * chunk_size
+        e = min(s + chunk_size, total)
+        if s < total:
+            ranges.append(all_ids[s:e])
+    _nsync_state["ranges"] = ranges
+
+    logger.info("=" * 60)
+    logger.info(f"🚀 [nsync] _RUN START")
+    logger.info(f"   workers    = {num_workers}")
+    logger.info(f"   ranges     = {len(ranges)}")
+    logger.info(f"   total_ids  = {total}")
+    logger.info(f"   skipped    = {len(skip)}")
+    logger.info(f"   group      = {_nsync_state['control_group_id']}")
+    logger.info("=" * 60)
+
+    progress_task = asyncio.create_task(_nsync_progress_loop(total))
+    worker_tasks = []
+    try:
+        for idx, (client, label) in enumerate(worker_pool_clients):
+            if idx >= len(ranges):
+                break
+            if _nsync_state["cancel"]:
+                break
+            my_ids = ranges[idx]
+            if not my_ids:
+                continue
+            logger.info(f"   → launching worker {idx}: {label} ({my_ids[0]}..{my_ids[-1]}, {len(my_ids)} ids)")
+            worker_tasks.append(asyncio.create_task(_nsync_worker(client, label, my_ids, idx)))
+            await asyncio.sleep(NSYNC_NINJA_STAGGER)
+        logger.info(f"   launched {len(worker_tasks)} workers — awaiting gather...")
+        await asyncio.gather(*worker_tasks, return_exceptions=True)
+    except Exception as e:
+        logger.exception(f"[nsync] _run error: {e}")
+    finally:
+        _nsync_state["running"] = False
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+        async with _nsync_state["lock"]:
+            s = dict(_nsync_state["stats"])
+        elapsed = int(time.time() - (_nsync_state["started_at"] or time.time()))
+        header = "🛑 <b>Cancelled</b>" if _nsync_state["cancel"] else "🏁 <b>Finished</b>"
+        try:
+            await bot1.send_message(
+                OWNER_ID,
+                f"{header} <b>NSync</b>\n\n"
+                f"✔️ Checked: <code>{s['checked']}</code>\n"
+                f"🆕 Imported: <code>{s['imported']}</code>\n"
+                f"🔄 Updated: <code>{s['updated']}</code>\n"
+                f"➖ Misses: <code>{s['misses']}</code>\n"
+                f"⚠️ Errors: <code>{s['errors']}</code>\n"
+                f"⏱️ Total: <code>{elapsed//60}m{elapsed%60}s</code>",
+                parse_mode='html',
+            )
+        except Exception:
+            pass
+        _nsync_state["cancel"] = False
+
+# ---------- Commands ----------
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsync(?:@\w+)?(?:\s+(\d+))?(?:\s+(\d+))?$', 'bot1')))
+async def nsync_cmd(event):
+    if event.sender_id != OWNER_ID: return
+    if _nsync_state["running"]:
+        return await event.reply("⚠️ <b>NSync က အလုပ်လုပ်နေဆဲ။</b> <code>/nsynccancel</code> နဲ့ ရပ်ပါ။", parse_mode='html')
+    sa = event.pattern_match.group(1)
+    ea = event.pattern_match.group(2)
+    start_id = int(sa) if sa else 1
+    end_id = int(ea) if ea else CATCHBOT_SYNC_PARALLEL_MAX_ID
+    if start_id < 1 or end_id < start_id:
+        return await event.reply("❌ Invalid range.", parse_mode='html')
+    if not worker_pool_clients:
+        return await event.reply("❌ Worker pool empty. <code>/xbotloadworkers</code> run ပါ။", parse_mode='html')
+    if _nsync_state["control_group_id"] == 0:
+        return await event.reply("❌ Control group မသတ်မှတ်ရသေး။ <code>/nsyncsetgroup -100xxx</code>", parse_mode='html')
+
+    # Reset state
+    _nsync_state["running"] = True
+    _nsync_state["cancel"] = False
+    _nsync_state["stats"] = {"checked": 0, "imported": 0, "updated": 0, "misses": 0, "errors": 0}
+    _nsync_state["progress"] = {}
+    _nsync_state["started_at"] = time.time()
+    _nsync_state["task"] = asyncio.create_task(_nsync_run(start_id, end_id))
+
+    await event.reply(
+        f"🔄 <b>NSync Started (Static Range)</b>\n"
+        f"📊 Range: <code>{start_id}..{end_id}</code>\n"
+        f"🥷 Workers: <code>{len(worker_pool_clients)}</code>\n"
+        f"📁 Group: <code>{_nsync_state['control_group_id']}</code>\n\n"
+        f"Progress: <code>/nsyncstatus</code> · Stop: <code>/nsynccancel</code>",
+        parse_mode='html',
+    )
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsyncsetgroup(?:@\w+)?\s+(-?\d+)$', 'bot1')))
+async def nsync_setgroup(event):
+    if event.sender_id != OWNER_ID: return
+    chat_id = int(event.pattern_match.group(1))
+    await _nsync_save_control_group(chat_id)
+    await event.reply(f"✅ NSync control group set to <code>{chat_id}</code>", parse_mode='html')
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsyncstatus(?:@\w+)?$', 'bot1')))
+async def nsync_status(event):
+    if event.sender_id != OWNER_ID: return
+    if not _nsync_state["running"]:
+        return await event.reply(
+            f"🔄 <b>NSync: idle</b>\n"
+            f"📁 Group: <code>{_nsync_state['control_group_id']}</code>\n"
+            f"🥷 Workers: <code>{len(worker_pool_clients)}</code>",
+            parse_mode='html',
+        )
+    async with _nsync_state["lock"]:
+        s = dict(_nsync_state["stats"])
+    total = sum(len(r) for r in _nsync_state["ranges"])
+    elapsed = int(time.time() - (_nsync_state["started_at"] or time.time()))
+    wl = []
+    for i in range(min(10, len(_nsync_state["ranges"]))):
+        d = _nsync_state["progress"].get(i, 0)
+        t = len(_nsync_state["ranges"][i])
+        pct = (d / t * 100) if t else 0
+        bf = int(pct / 10)
+        wl.append(f"  [{i+1}] {'█'*bf}{'░'*(10-bf)} <code>{d}/{t}</code>")
+    await event.reply(
+        f"🔄 <b>NSync: RUNNING</b>\n"
+        f"📊 <code>{s['checked']}/{total}</code>\n"
+        f"🆕 <code>{s['imported']}</code> 🔄 <code>{s['updated']}</code> "
+        f"➖ <code>{s['misses']}</code> ⚠️ <code>{s['errors']}</code>\n"
+        f"⏱️ <code>{elapsed//60}m{elapsed%60}s</code>\n\n"
+        + "\n".join(wl),
+        parse_mode='html',
+    )
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsynccancel(?:@\w+)?$', 'bot1')))
+async def nsync_cancel(event):
+    if event.sender_id != OWNER_ID: return
+    if not _nsync_state["running"]:
+        return await event.reply("ℹ️ NSync မလုပ်နေပါ။", parse_mode='html')
+    _nsync_state["cancel"] = True
+    await event.reply("🛑 Cancel requested — workers က current ID ပြီးမှ ရပ်မယ်။", parse_mode='html')
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsyncdebug(?:@\w+)?$', 'bot1')))
+async def nsync_debug(event):
+    if event.sender_id != OWNER_ID: return
+    total = len(worker_pool_clients)
+    alive = 0
+    lines = []
+    for i, (c, label) in enumerate(worker_pool_clients[:15], 1):
+        try:
+            conn = c.is_connected()
+            alive += 1 if conn else 0
+            lines.append(f"  {i}. <code>{label}</code> — conn={conn}")
+        except Exception as e:
+            lines.append(f"  {i}. <code>{label}</code> — <code>{type(e).__name__}</code>")
+    synced = await characters_base_col.count_documents({"synced_via_check": True, "char_id": {"$regex": r"^BOD\d+$"}})
+    total_bod = await characters_base_col.count_documents({"char_id": {"$regex": r"^BOD\d+$"}})
+    await event.reply(
+        f"🔍 <b>NSync Debug</b>\n"
+        f"👥 workers: <code>{total}</code>\n"
+        f"🟢 connected: <code>{alive}</code>\n"
+        f"🔄 nsync.running: <code>{_nsync_state['running']}</code>\n"
+        f"📁 control group: <code>{_nsync_state['control_group_id']}</code>\n"
+        f"🎯 target bot: <code>{CATCHBOT_SYNC_CHAT_ID}</code>\n\n"
+        f"📊 DB: <code>{synced}</code> synced / <code>{total_bod}</code> total BOD\n\n"
+        f"<b>First 15 workers:</b>\n" + "\n".join(lines) +
+        (f"\n  …+{total - 15}" if total > 15 else ""),
+        parse_mode='html',
+    )
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]nsyncwarmup(?:@\w+)?$', 'bot1')))
+async def nsync_warmup(event):
+    if event.sender_id != OWNER_ID: return
+    if not worker_pool_clients:
+        return await event.reply("❌ Worker pool empty.", parse_mode='html')
+    status = await event.reply(
+        f"🔥 Background warm-up of <b>{len(worker_pool_clients)}</b> workers...\n"
+        f"<i>Progress ကို update ဖြစ်လာမယ်။</i>",
+        parse_mode='html',
+    )
+    asyncio.create_task(_nsync_warmup_bg(status))
+
+async def _nsync_warmup_bg(status_msg):
+    ok = fail = 0
+    lines = []
+    pairs = list(worker_pool_clients)
+    for i, (c, label) in enumerate(pairs, 1):
+        try:
+            success = await _nsync_warmup_one(c, label)
+        except Exception as e:
+            logger.warning(f"[nsync warmup] {label}: {e}")
+            success = False
+        if success:
+            ok += 1
+            lines.append(f"  {i}. ✅ <code>{escape_html(label)}</code>")
+        else:
+            fail += 1
+            lines.append(f"  {i}. ❌ <code>{escape_html(label)}</code>")
+        if i % 5 == 0 or i == len(pairs):
+            try:
+                await status_msg.edit(
+                    f"🔥 <b>Warm-up {i}/{len(pairs)}</b>\n"
+                    f"✅ <b>{ok}</b> · ❌ <b>{fail}</b>\n\n" + "\n".join(lines[-8:]),
+                    parse_mode='html',
+                )
+            except Exception:
+                pass
+    try:
+        await status_msg.edit(
+            f"🔥 <b>Warm-up DONE</b>\n✅ OK: <b>{ok}</b> · ❌ Fail: <b>{fail}</b>\n\n"
+            + "\n".join(lines[:25]) + (f"\n  …+{len(lines)-25}" if len(lines) > 25 else ""),
+            parse_mode='html',
+        )
+    except Exception:
+        pass
 async def _create_indexes_background():
     """Runs create_indexes() without blocking bot startup — index creation is a MongoDB round
     trip per index (~35 of them), which used to make bot1/bot2 sit disconnected from Telegram
@@ -13566,6 +14125,11 @@ async def start_system():
     threading.Thread(target=run_flask, daemon=True).start()
     print("Bot System Starting...")
     asyncio.create_task(_create_indexes_background())
+    # 🥷 NSync — load persistent control-group setting, then schedule boot warm-up
+    try:
+        await _nsync_load_settings()
+    except Exception as e:
+        print(f"nsync load_settings on boot failed: {e}")
     asyncio.create_task(start_bot_state_cleanup_loop())
     asyncio.create_task(daily_report_scheduler())
     # 🔭 Cross-bot monitor: load its small config tables, then — if a login session was
@@ -13579,6 +14143,8 @@ async def start_system():
     # in place for that resume's clamping to be correct.
     asyncio.create_task(load_and_start_monitor_userbot())
     asyncio.create_task(load_worker_pool())
+# 🥷 NSync — auto warm-up all workers to the target bot after load
+    asyncio.create_task(_nsync_boot_warmup())
     global BOT1_READY
     BOT1_READY = asyncio.Event()
     asyncio.create_task(_startup_media_identity_warm())
