@@ -5812,6 +5812,252 @@ async def rarity_gate_quiz_timeout_watcher(chat_id, msg_id):
         if pending_rarity_quiz.get(chat_id, {}).get("msg_id") == msg_id:
             del pending_rarity_quiz[chat_id]
 
+# ==========================================
+# 🎁 /multigift — OWNER-ONLY bulk gift
+# ==========================================
+# Owner replies to a message full of char IDs and pushes N copies of EACH into one target's
+# real harem. Unlike the normal /gift flow, entries are written as UNBOUND so the target
+# sees them as "real" copies everywhere:
+#   • 💥 Real Fuck count in /harem (find_real_copy returns non-bound vault entries)
+#   • 🎖️ Top 10 Catchers in /check (aggregation counts any harem.char_id)
+#   • Re-giftable as 💥 Real Fuck (source-choice prompt shows because has_real_copy is True)
+#   • Protected from the Supreme/Cataphract cap-sweep (chat_id field set → plan_user_removals
+#     treats them as untouchable, exactly like a real /fuck catch)
+# Works for ANY target — even an added-owner — because entries go straight into the harem
+# array, not into the unlimited-vault view. Command is repeatable (no cap tracking on
+# the giver's side); owner is trusted to know what they're doing.
+# ==========================================
+MULTIGIFT_MAX_IDS = 500            # safety: max unique char IDs per invocation
+MULTIGIFT_MAX_MULTIPLIER = 50      # safety: max copies of each card
+MULTIGIFT_MAX_TOTAL_COPIES = 5000  # safety: max total harem entries pushed in one command
+MULTIGIFT_REPORT_LIMIT = 30        # how many cards to list in the final confirmation
+MULTIGIFT_PACING_SECONDS = 0.25    # pause between per-ID Mongo pushes
+
+multigift_log_col = db["multigift_log"]  # 🧾 audit trail — one doc per invocation
+
+def parse_multigift_ids(text, max_ids=MULTIGIFT_MAX_IDS):
+    """Extract char IDs from free text. Accepts '1234', 'BOD1234', ranges '100-150',
+    separated by spaces/commas/semicolons/newlines. Lines starting with '#' are ignored.
+    Returns (ids, ignored_token_count, truncated)."""
+    ids, seen, ignored, truncated = [], set(), 0, False
+    if not text:
+        return ids, ignored, truncated
+    # drop comment lines (matches /addtriviabulk's "#..." convention)
+    cleaned = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#")
+    )
+    for token in re.split(r'[\s,;]+', cleaned):
+        token = token.strip()
+        if not token:
+            continue
+        rm = re.match(r'^(?:bod)?(\d{1,7})\s*[-–—]\s*(?:bod)?(\d{1,7})$', token, re.IGNORECASE)
+        if rm:
+            a, b = sorted((int(rm.group(1)), int(rm.group(2))))
+            if b - a > max_ids * 5:  # a nonsense-huge range — refuse silently
+                ignored += 1
+                continue
+            for n in range(a, b + 1):
+                cid = f"BOD{n}"
+                if cid in seen:
+                    continue
+                if len(ids) >= max_ids:
+                    truncated = True
+                    break
+                seen.add(cid)
+                ids.append(cid)
+            continue
+        sm = re.match(r'^(?:bod)?(\d{1,7})$', token, re.IGNORECASE)
+        if sm:
+            cid = f"BOD{int(sm.group(1))}"
+            if cid in seen:
+                continue
+            if len(ids) >= max_ids:
+                truncated = True
+                break
+            seen.add(cid)
+            ids.append(cid)
+            continue
+        ignored += 1
+    return ids, ignored, truncated
+
+@bot1.on(events.NewMessage(pattern=own_pattern(r'^[/.]multigift(?:@\w+)?\s+(-?\d+)(?:\s+[xX×]?\s*(\d+))?$', 'bot1')))
+async def multigift_command(event):
+    if event.sender_id != OWNER_ID:
+        return
+    if is_duplicate_event(event):
+        return
+
+    target_id = int(event.pattern_match.group(1))
+    mult_raw = event.pattern_match.group(2)
+    multiplier = int(mult_raw) if mult_raw else 1
+
+    # ---- validation ----
+    if target_id == OWNER_ID:
+        return await event.reply("❌ ကိုယ့်ကိုယ်ကို multigift လုပ်လို့မရပါ။", parse_mode='html')
+    if target_id in bot_ids:
+        return await event.reply("❌ Bot တစ်ခုကို multigift လုပ်လို့မရပါ။", parse_mode='html')
+    if multiplier < 1:
+        return await event.reply("❌ Multiplier က 1 ထက် ကြီးရပါမယ်။", parse_mode='html')
+    if multiplier > MULTIGIFT_MAX_MULTIPLIER:
+        return await event.reply(
+            f"❌ Multiplier က <code>{MULTIGIFT_MAX_MULTIPLIER}</code> ထက် မကြီးရပါ။", parse_mode='html'
+        )
+    if not event.is_reply:
+        return await event.reply(
+            "📌 <b>Usage:</b> ကဒ် ID တွေပါတဲ့ message ကို <b>Reply</b> ပြန်ပြီး\n"
+            "<code>/multigift &lt;user_id&gt; [xN]</code> ရိုက်ပါ။\n\n"
+            "<i>Examples:</i>\n"
+            "• <code>/multigift 123456789</code>  →  တစ်ခုစီ 1 ခု\n"
+            "• <code>/multigift 123456789 x3</code>  →  တစ်ခုစီ 3 ခု\n\n"
+            "<b>ID format:</b> <code>1234</code>, <code>BOD1234</code>, ranges <code>100-150</code>၊ "
+            "space/comma/newline ခွဲလို့ရတယ်။ <code>#</code> နဲ့ စတဲ့ line တွေ ကျော်မယ်။",
+            parse_mode='html'
+        )
+
+    replied = await event.get_reply_message()
+    text = replied.raw_text or "" if replied else ""
+    ids, ignored, truncated = parse_multigift_ids(text)
+
+    if not ids:
+        return await event.reply(
+            "❌ Reply ထဲမှာ char ID တွေ ရှာမတွေ့ပါ။\n"
+            "<i>Example reply content:</i> <code>1234 1235 1300-1310</code>",
+            parse_mode='html'
+        )
+
+    total_copies = len(ids) * multiplier
+    if total_copies > MULTIGIFT_MAX_TOTAL_COPIES:
+        return await event.reply(
+            f"❌ Total copies (<code>{total_copies}</code>) က safety cap "
+            f"<code>{MULTIGIFT_MAX_TOTAL_COPIES}</code> ကို ကျော်နေပါတယ်။\n"
+            f"Multiplier ကို လျှော့ပါ သို့မဟုတ် ID အရေအတွက် လျှော့ပါ။",
+            parse_mode='html'
+        )
+
+    # ---- fetch target info + validate IDs exist ----
+    target_name = await get_plain_name(event, target_id)
+    target_mention = await get_html_mention(event, target_id)
+
+    char_docs = await characters_base_col.find(
+        {"char_id": {"$in": ids}},
+        {"char_id": 1, "name": 1, "rarity": 1, "rarity_tier": 1, "_id": 0}
+    ).to_list(length=None)
+    found_ids = {d["char_id"] for d in char_docs}
+    missing = [cid for cid in ids if cid not in found_ids]
+    valid_docs = [d for d in char_docs if d["char_id"] in found_ids]
+
+    if not valid_docs:
+        return await event.reply(
+            f"❌ ရှာတွေ့တဲ့ ID <code>{len(ids)}</code> ခုလုံး database ထဲမှာ မရှိပါ။\n"
+            f"<i>Missing (first 20):</i> <code>{', '.join(display_char_id(c) for c in missing[:20])}</code>",
+            parse_mode='html'
+        )
+
+    status = await event.reply(
+        f"<b>Multigift စတင်...</b>\n\n"
+        f"<b>To ဂွေးတို STT:</b> {target_mention}\n"
+        f"<b>Unique IDs:</b> <code>{len(valid_docs)}</code>\n"
+        f"<b>Multiplier:</b> <code>{multiplier}</code>\n"
+        f"<b>Total copies:</b> <code>{len(valid_docs) * multiplier}</code>",
+        parse_mode='html'
+    )
+
+    # ---- write entries ----
+    now = time.time()
+    chat_marker = event.chat_id if event.chat_id else 0   # any non-None int protects from the cap sweep
+    total_pushed, failed = 0, []
+    for idx, doc in enumerate(valid_docs):
+        cid = doc["char_id"]
+        rarity = doc.get("rarity", "Unknown")
+        try:
+            entries = []
+            for i in range(multiplier):
+                entries.append({
+                    "char_id": cid,
+                    "caught_date": now + idx + (i * 0.001),   # micro-offset per copy → distinct caught_date
+                    "rarity": rarity,
+                    "status": "vault",
+                    "chat_id": chat_marker,          # protects from cap sweep + counts as "real"
+                    "multigift_by": OWNER_ID,         # audit marker (not "bound", so acts like a real catch)
+                })
+            await users_catcher_col.update_one(
+                {"user_id": target_id},
+                {
+                    "$push": {"harem": {"$each": entries}},
+                    "$inc": {"total_caught": multiplier, "total_gift_received": multiplier}
+                },
+                upsert=True
+            )
+            total_pushed += multiplier
+        except Exception as e:
+            failed.append(cid)
+            print(f"⚠️ multigift push error for {cid}: {type(e).__name__}: {e}")
+        await asyncio.sleep(MULTIGIFT_PACING_SECONDS)
+
+    # ---- audit log ----
+    try:
+        await multigift_log_col.insert_one({
+            "owner_id": OWNER_ID,
+            "target_id": target_id,
+            "multiplier": multiplier,
+            "requested_ids": ids,
+            "valid_ids": [d["char_id"] for d in valid_docs],
+            "missing_ids": missing,
+            "failed_ids": failed,
+            "pushed_copies": total_pushed,
+            "timestamp": now,
+        })
+    except Exception as e:
+        print(f"⚠️ multigift_log insert failed: {type(e).__name__}: {e}")
+
+    # ---- report ----
+    shown = valid_docs[:MULTIGIFT_REPORT_LIMIT]
+    lines = [
+        f"  • <code>{display_char_id(d['char_id'])}</code> — {escape_html(d.get('name', '?'))}"
+        for d in shown
+    ]
+    if len(valid_docs) > MULTIGIFT_REPORT_LIMIT:
+        lines.append(f"  …and <code>{len(valid_docs) - MULTIGIFT_REPORT_LIMIT}</code> more")
+
+    report = (
+        f"✅ <b>Multigift အောင်မြင်</b>\n\n"
+        f"<b>To:</b> {target_mention} <code>({target_id})</code>\n"
+        f"<b>Unique IDs:</b> <code>{len(valid_docs)}</code>\n"
+        f"<b>Multiplier:</b> <code>{multiplier}</code>\n"
+        f"<b>Copies pushed:</b> <code>{total_pushed}</code>"
+    )
+    if missing:
+        report += (
+            f"\n\n❌ <b>Missing IDs ({len(missing)}):</b> "
+            f"<code>{', '.join(display_char_id(c) for c in missing[:20])}"
+            + (f" …+{len(missing) - 20}" if len(missing) > 20 else "") + "</code>"
+        )
+    if failed:
+        report += (
+            f"\n⚠️ <b>Failed ({len(failed)}):</b> "
+            f"<code>{', '.join(display_char_id(c) for c in failed[:20])}</code>"
+        )
+    if ignored:
+        report += f"\n\n<i>Ignored {ignored} non-ID token(s) in the reply.</i>"
+    if truncated:
+        report += f"\n<i>Truncated at {MULTIGIFT_MAX_IDS} unique IDs (safety cap).</i>"
+    report += "\n\n<b>Gifted:</b>\n" + "\n".join(lines)
+
+    await status.edit(report, parse_mode='html')
+
+    # ---- best-effort DM the target ----
+    try:
+        await bot1.send_message(
+            target_id,
+            f"<b>Gifting From Owner/b>\n\n"
+            f"<b>Unique characters:</b> <code>{len(valid_docs)}</code>\n"
+            f"<b>Copies each:</b> <code>{multiplier}</code>\n"
+            f"<b>Total:</b> <code>{total_pushed}</code>\n\n"
+            f"/harem → 💥 Real Fuck မှာ ကြည့်လိုက်တော့",
+            parse_mode='html'
+        )
+    except Exception:
+        pass  # target blocked the bot / never opened a DM — the harem push itself already succeeded
 # ---- /addquiz: owner-only, step-by-step authoring of a Rarity 1-4 gate question. DM-only so
 # nobody sees it being built. Question may be plain text OR a photo/video with the question as
 # caption — that image is the QUIZ's own illustration, never the character being gated. ----
